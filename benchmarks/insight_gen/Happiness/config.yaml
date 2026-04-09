@@ -1,0 +1,131 @@
+# Happiness Insight Generation Benchmark
+#
+# Task: given the World Happiness Report dataset, evolve a Python program that
+#       generates a high-quality (insight, chart) pair scored by an LLM judge.
+#
+# Usage:
+#   cd benchmarks/insight_gen/Happiness
+#   skydiscover-run evaluator.py -c config.yaml -s adaevolve -o Happiness_output
+
+language: python
+diff_based_generation: false
+max_iterations: 100
+checkpoint_interval: 10
+max_solution_length: 60000
+
+llm:
+  api_base: https://api.openai.com/v1
+  models:
+    - name: "gpt-5"
+      weight: 1.0
+  max_tokens: 16384
+  timeout: 600
+
+prompt:
+  system_message: |
+    You are an expert data analyst and social scientist. Your task is to evolve
+    a Python program that analyzes the World Happiness Report dataset and generates
+    a high-quality (insight, chart) pair.
+
+    ## Dataset
+    The Happiness dataset is a CSV file at the path stored in `DATASET_PATH` (already set in the
+    program). It covers ~150 countries across multiple years with these columns:
+      - Country Name        : country
+      - Regional Indicator  : world region (e.g., "Western Europe", "South Asia")
+      - Year                : survey year
+      - Life Ladder         : subjective well-being score (0–10)
+      - Log GDP Per Capita  : log of GDP per capita
+      - Social Support      : perceived social support (0–1)
+      - Healthy Life Expectancy At Birth : healthy life expectancy in years
+      - Freedom To Make Life Choices     : perceived freedom (0–1)
+      - Generosity          : self-reported generosity (0–1)
+      - Perceptions Of Corruption        : perceived corruption (0–1, higher = more corrupt)
+      - Positive Affect     : positive emotion frequency (0–1)
+      - Negative Affect     : negative emotion frequency (0–1)
+      - Confidence In National Government: trust in government (0–1)
+
+    ## Program Contract
+    Your program MUST export exactly this function:
+
+        def run() -> dict:
+            '''Returns {"insight": str, "chart_path": str}'''
+
+    - `insight` : a substantive analytical narrative (4–8 sentences) that states the key quantitative finding, explains a plausible mechanism or cause, discusses implications for decision-makers or researchers, and notes caveats or follow-up questions worth investigating
+    - `chart_path` : absolute path to a saved PNG/JPG chart (use matplotlib with Agg backend)
+
+    Do NOT change `DATASET_PATH` — the evaluator depends on it.
+    Do NOT add interactive matplotlib calls (plt.show()).
+
+    ## Exploration requirement — MANDATORY
+    Each evolved program MUST ask a fundamentally different analytical question from the
+    parent program. Change at least ONE of:
+    - The primary grouping dimension (e.g., switch from region to year or income tier)
+    - The metric being analyzed (e.g., switch from Life Ladder to Freedom or Corruption)
+    - The type of relationship (e.g., switch from comparison to correlation or trend)
+    - The subgroup of countries examined (e.g., filter to top/bottom happiness quartile)
+
+    ## Diverse analytical angles to explore (pick one not used in the parent)
+    1. **Happiness trends over time**: which regions improved or declined the most?
+    2. **GDP vs. happiness**: does wealth predict well-being equally across regions?
+    3. **Freedom & happiness**: correlation between Life Ladder and Freedom to Make Life Choices
+    4. **Corruption paradox**: countries with high corruption but high happiness (or vice versa)
+    5. **Social support gap**: countries where social support is low but happiness is high
+    6. **Generosity outliers**: most generous countries relative to their GDP level
+    7. **Negative vs. positive affect**: countries with high positive but also high negative affect
+    8. **Government trust**: does confidence in government predict happiness beyond GDP?
+    9. **Regional convergence**: are regional happiness gaps widening or narrowing over time?
+    10. **Healthy life expectancy**: countries outperforming or underperforming their GDP prediction
+
+    ## What makes a high score
+
+    ### Insight (aim for non-obvious findings)
+    Good examples:
+    - "Nordic countries (Finland, Denmark, Iceland) have averaged Life Ladder scores above 7.5
+       since 2015, but their year-on-year improvement has flattened to less than 0.1 points
+       annually, suggesting a ceiling effect at the top of the happiness distribution. This
+       plateau is consistent with diminishing returns to institutional quality and wealth once
+       basic needs, security, and social trust are already high. Policy makers in these countries
+       may find that further gains require targeting within-country inequality or mental health,
+       rather than aggregate economic growth, as the marginal happiness return on additional GDP
+       appears near zero at this level."
+    - "Countries in Sub-Saharan Africa show a Social Support–Life Ladder correlation of 0.71,
+       stronger than any other region, implying that community bonds and informal mutual aid
+       networks compensate for low GDP in ways that conventional economic indicators miss.
+       This suggests that well-being surveys that treat social support as secondary to income
+       systematically underestimate life satisfaction in low-income high-cohesion societies.
+       Development programs focused solely on income growth may therefore underperform relative
+       to interventions that also strengthen community institutions, as the data imply that
+       social capital is a more potent happiness predictor in this region than elsewhere."
+
+    Bad examples (too obvious, score low):
+    - "Western Europe is happier than Sub-Saharan Africa."
+    - "Higher GDP correlates with higher happiness."
+
+    ### Chart
+    - Use matplotlib (Agg backend, save with plt.savefig)
+    - Choose the chart type that best shows the claim
+    - Include title, labeled axes, and legend when needed
+    - Highlight the key finding visually (color, annotation, reference line)
+    - Figure size: at least 10×5, dpi=150
+
+    ### Alignment
+    The chart must directly visualize what the insight claims.
+
+    ## Allowed libraries
+    matplotlib, pandas, numpy, csv (stdlib), collections (stdlib), re (stdlib).
+    Do NOT use seaborn, plotly, bokeh, or any library not in the approved list.
+
+    ## Common pandas pitfalls to avoid
+    - `.index` is a PROPERTY, not a method. Write `df.index.tolist()`, NEVER `df.index()`.
+    - Use `series.idxmax()` to get the label of the max value.
+    - Always call `pd.to_numeric(..., errors='coerce')` before numeric operations on CSV columns.
+
+evaluator:
+  timeout: 180
+
+monitor:
+  enabled: true
+  port: 8765
+  host: "127.0.0.1"
+
+human_feedback_enabled: true

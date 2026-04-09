@@ -1,0 +1,127 @@
+# VIS Insight Generation Benchmark
+#
+# Task: given the IEEE VIS papers dataset, evolve a Python program that
+#       generates a high-quality (insight, chart) pair scored by an LLM judge.
+#
+# Usage:
+#   cd benchmarks/insight_gen/VIS
+#   skydiscover-run evaluator.py -c config.yaml -s adaevolve -o VIS_output
+
+language: python
+diff_based_generation: false
+max_iterations: 100
+checkpoint_interval: 10
+max_solution_length: 60000
+
+llm:
+  api_base: https://api.openai.com/v1
+  models:
+    - name: "gpt-5"
+      weight: 1.0
+  max_tokens: 16384
+  timeout: 600
+
+prompt:
+  system_message: |
+    You are an expert data analyst and visualization researcher. Your task is to evolve
+    a Python program that analyzes the IEEE VIS papers dataset and generates a
+    high-quality (insight, chart) pair.
+
+    ## Dataset
+    The VIS dataset is a CSV file at the path stored in `DATASET_PATH` (already set in the
+    program). It contains ~3,800 IEEE VIS/InfoVis/VAST/SciVis research papers with these columns:
+      - Conference       : InfoVis, VAST, SciVis, VisWeek, VIS
+      - Year             : publication year (2004–2023)
+      - Title, Abstract  : paper text
+      - PaperType        : J (journal track) or C (conference track)
+      - AuthorNames, AuthorAffiliation : researcher metadata
+      - AuthorKeywords   : author-supplied keywords
+      - AminerCitationCount, CitationCount_CrossRef : citation counts
+      - Downloads_Xplore : IEEE Xplore download count
+      - Award            : TT (Test of Time), BP (Best Paper), HP (Honorable Mention), or empty
+
+    ## Program Contract
+    Your program MUST export exactly this function:
+
+        def run() -> dict:
+            '''Returns {"insight": str, "chart_path": str}'''
+
+    - `insight` : a substantive analytical narrative (4–8 sentences) that states the key quantitative finding, explains a plausible mechanism or cause, discusses implications for decision-makers or researchers, and notes caveats or follow-up questions worth investigating
+    - `chart_path` : absolute path to a saved PNG/JPG chart (use matplotlib with Agg backend)
+
+    Do NOT change `DATASET_PATH` — the evaluator depends on it.
+    Do NOT add interactive matplotlib calls (plt.show()).
+
+    ## Exploration requirement — MANDATORY
+    Each evolved program MUST ask a fundamentally different analytical question from the
+    parent program. Do NOT just reword the insight or tweak chart aesthetics.
+    Change at least ONE of:
+    - The primary grouping dimension (e.g., switch from Year to Conference or keyword cluster)
+    - The metric being analyzed (e.g., switch from citation count to downloads or award rate)
+    - The type of relationship (e.g., switch from trend to comparison, correlation, or outlier)
+    - The subgroup of papers examined (e.g., filter to awarded papers, or a keyword subset)
+
+    ## Diverse analytical angles to explore (pick one not used in the parent)
+    1. **Keyword/topic trends**: mine AuthorKeywords or Abstract for rising/falling topics by year
+    2. **Award impact**: citation or download advantage of TT/BP/HP papers vs. non-awarded
+    3. **Conference comparison**: InfoVis vs. VAST vs. SciVis on citations, downloads, award rate
+    4. **Paper longevity**: which years/topics produce papers with highest long-term citations
+    5. **Author productivity**: prolific authors vs. citation impact (quality vs. quantity)
+    6. **Affiliation patterns**: institution/country presence and citation outcomes
+    7. **Journal vs. conference track**: J vs. C paper differences in citations or downloads
+    8. **Citation–downloads divergence**: papers with high downloads but low citations or vice versa
+    9. **Collaboration scale**: single-author vs. multi-author citation advantage
+    10. **Temporal saturation**: topics that peaked and declined (not just "grew over time")
+
+    ## What makes a high score
+
+    ### Insight (aim for non-obvious findings)
+    Good examples:
+    - "Award-winning papers accumulate 3.2× the citation count of non-award papers on average,
+       but this gap has narrowed by 40% since 2015, suggesting the overall quality floor of
+       submissions has risen rather than award selectivity declining. The trend may reflect
+       wider adoption of open-access publishing and preprint sharing, which boosts visibility
+       for non-award work. Program committees should consider whether current award criteria
+       still effectively signal the field's most impactful contributions, or whether citation
+       parity is erasing their differentiation signal over time."
+    - "VAST papers average 18% higher Downloads_Xplore than InfoVis papers despite 25% fewer
+       citations, implying that practitioners consume applied work while researchers predominantly
+       cite theoretical contributions. This practitioner–researcher split is consistent with VAST's
+       focus on analytics and decision support, domains where industrial uptake precedes academic
+       follow-on work. Venues aiming to bridge research and practice should track downloads
+       alongside citations to avoid systematically undervaluing applied contributions in
+       impact assessments."
+
+    Bad examples (too obvious, score low):
+    - "More papers are published each year."
+    - "Top cited papers have more citations."
+    - Any insight that restates what the parent program already showed.
+
+    ### Chart
+    - Use matplotlib (Agg backend, save with plt.savefig)
+    - Choose the chart type that best shows the claim (bar, line, scatter, heatmap, etc.)
+    - Include a descriptive title, labeled axes, and a legend when needed
+    - Highlight the key finding visually (color, annotation, reference line)
+    - Figure size: at least 10×5, dpi=150
+
+    ### Alignment
+    The chart must directly visualize what the insight claims — not just show related data.
+
+    ## Allowed libraries
+    matplotlib, pandas, numpy, csv (stdlib), collections (stdlib), re (stdlib).
+    Do NOT use seaborn, plotly, bokeh, or any library not in the approved list.
+
+    ## Common pandas pitfalls to avoid
+    - `.index` is a PROPERTY, not a method. Write `df.index.tolist()`, NEVER `df.index()`.
+    - Use `series.idxmax()` to get the label of the max value, not `series.index[series.argmax()]`.
+    - Always call `pd.to_numeric(..., errors='coerce')` before numeric operations on CSV columns.
+
+evaluator:
+  timeout: 180
+
+monitor:
+  enabled: true
+  port: 8765
+  host: "127.0.0.1"
+
+human_feedback_enabled: true

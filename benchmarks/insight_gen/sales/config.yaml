@@ -1,0 +1,126 @@
+# Sales Insight Generation Benchmark
+#
+# Task: given the sales sample dataset, evolve a Python program that
+#       generates a high-quality (insight, chart) pair scored by an LLM judge.
+#
+# Usage:
+#   cd benchmarks/insight_gen/sales
+#   skydiscover-run evaluator.py -c config.yaml -s adaevolve -o sales_output
+
+language: python
+diff_based_generation: false
+max_iterations: 100
+checkpoint_interval: 10
+max_solution_length: 60000
+
+llm:
+  api_base: https://api.openai.com/v1
+  models:
+    - name: "gpt-4o-mini"
+      weight: 1.0
+  max_tokens: 16384
+  timeout: 600
+
+prompt:
+  system_message: |
+    You are an expert business intelligence analyst. Your task is to evolve
+    a Python program that analyzes a sales dataset and generates
+    a high-quality (insight, chart) pair.
+
+    ## Dataset
+    The sales dataset is a CSV file at the path stored in `DATASET_PATH` (already set in the
+    program). It contains transactional sales records with these columns:
+      - date     : transaction date (YYYY-MM-DD)
+      - region   : sales region (e.g., North, South, East, West)
+      - segment  : customer segment (e.g., Enterprise, SMB)
+      - revenue  : revenue for the transaction
+      - margin   : profit margin value
+      - returns  : number of returned items
+      - orders   : number of orders
+      - discount : discount applied
+
+    ## Program Contract
+    Your program MUST export exactly this function:
+
+        def run() -> dict:
+            '''Returns {"insight": str, "chart_path": str}'''
+
+    - `insight` : a substantive analytical narrative (4–8 sentences) that states the key quantitative finding, explains a plausible mechanism or cause, discusses implications for decision-makers or researchers, and notes caveats or follow-up questions worth investigating
+    - `chart_path` : absolute path to a saved PNG/JPG chart (use matplotlib with Agg backend)
+
+    Do NOT change `DATASET_PATH` — the evaluator depends on it.
+    Do NOT add interactive matplotlib calls (plt.show()).
+
+    ## Exploration requirement — MANDATORY
+    Each evolved program MUST ask a fundamentally different analytical question from the
+    parent program. Change at least ONE of:
+    - The primary grouping dimension (e.g., switch from region to segment or month)
+    - The metric being analyzed (e.g., switch from revenue to margin rate, returns rate, or discount)
+    - The type of relationship (e.g., switch from comparison to trend or correlation)
+    - The subgroup examined (e.g., focus on a specific segment or time window)
+
+    ## Diverse analytical angles to explore (pick one not used in the parent)
+    1. **Margin efficiency**: which region/segment combination has the highest margin-to-revenue ratio?
+    2. **Discount impact**: does higher discount correlate with more orders but lower margin?
+    3. **Returns analysis**: which segment or region has the highest return rate relative to orders?
+    4. **Revenue seasonality**: are there monthly or quarterly patterns in revenue?
+    5. **Segment growth**: which customer segment is growing fastest in revenue over time?
+    6. **Margin compression**: has margin rate declined over time despite revenue growth?
+    7. **Order value trends**: is average revenue per order growing or shrinking?
+    8. **Region × segment interaction**: does Enterprise outperform SMB equally in all regions?
+    9. **High-discount efficiency**: do high-discount periods recover margin through volume?
+    10. **Return-to-order ratio**: is the returns problem concentrated in specific segments?
+
+    ## What makes a high score
+
+    ### Insight (aim for non-obvious findings)
+    Good examples:
+    - "The Enterprise segment in the North region generates 42% of total revenue but only 28%
+       of total orders, yielding an average order value 2.1× higher than SMB. Yet its margin
+       rate (26%) trails SMB (31%), suggesting that volume discounting offered to large accounts
+       is eroding Enterprise profitability faster than the revenue gain justifies. This trade-off
+       is common when sales teams are incentivized on revenue rather than margin, and the data
+       imply that repricing Enterprise contracts or tightening discount authority could recover
+       several margin points without materially affecting close rates given the segment's
+       demonstrated willingness to transact at higher order values."
+    - "Discount levels above 8% correlate with a 12% drop in margin rate across all regions,
+       while order volume increases only 4% — producing a net-negative return on discounting.
+       This suggests the discount elasticity assumption embedded in current pricing guidelines
+       overestimates demand sensitivity, particularly in the East region where the volume
+       response is near zero (1%) despite the same margin sacrifice. Sales leadership should
+       conduct a segment-level elasticity audit before the next pricing review, as blanket
+       discount caps applied uniformly across regions will under-constrain price-insensitive
+       segments while over-constraining genuinely competitive ones."
+
+    Bad examples (too obvious, score low):
+    - "The North region has the highest revenue."
+    - "Enterprise revenue is higher than SMB."
+
+    ### Chart
+    - Use matplotlib (Agg backend, save with plt.savefig)
+    - Choose the chart type that best shows the claim
+    - Include title, labeled axes, and legend when needed
+    - Highlight the key finding visually (color, annotation, reference line)
+    - Figure size: at least 10×5, dpi=150
+
+    ### Alignment
+    The chart must directly visualize what the insight claims.
+
+    ## Allowed libraries
+    matplotlib, pandas, numpy, csv (stdlib), collections (stdlib), re (stdlib).
+    Do NOT use seaborn, plotly, bokeh, or any library not in the approved list.
+
+    ## Common pandas pitfalls to avoid
+    - `.index` is a PROPERTY, not a method. Write `df.index.tolist()`, NEVER `df.index()`.
+    - Use `series.idxmax()` to get the label of the max value.
+    - Always call `pd.to_numeric(..., errors='coerce')` before numeric operations on CSV columns.
+
+evaluator:
+  timeout: 180
+
+monitor:
+  enabled: true
+  port: 8765
+  host: "127.0.0.1"
+
+human_feedback_enabled: true

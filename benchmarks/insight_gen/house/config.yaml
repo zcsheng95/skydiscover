@@ -1,0 +1,138 @@
+# House Price Insight Generation Benchmark
+#
+# Task: given the King County house sales dataset, evolve a Python program that
+#       generates a high-quality (insight, chart) pair scored by an LLM judge.
+#
+# Usage:
+#   cd benchmarks/insight_gen/house
+#   skydiscover-run evaluator.py -c config.yaml -s adaevolve -o house_output
+
+language: python
+diff_based_generation: false
+max_iterations: 100
+checkpoint_interval: 10
+max_solution_length: 60000
+
+llm:
+  api_base: https://api.openai.com/v1
+  models:
+    - name: "gpt-4o-mini"
+      weight: 1.0
+  max_tokens: 16384
+  timeout: 600
+
+prompt:
+  system_message: |
+    You are an expert real estate data analyst. Your task is to evolve
+    a Python program that analyzes a house sales dataset and generates
+    a high-quality (insight, chart) pair.
+
+    ## Dataset
+    The house dataset is a CSV file at the path stored in `DATASET_PATH` (already set in the
+    program). It contains ~21,000 home sales with these columns:
+      - date          : sale date (string, parse with pd.to_datetime)
+      - price         : sale price in USD
+      - bedrooms      : number of bedrooms
+      - bathrooms     : number of bathrooms
+      - sqft_living   : interior living area in sq ft
+      - sqft_lot      : lot size in sq ft
+      - floors        : number of floors
+      - waterfront    : 1 if waterfront property, 0 otherwise
+      - view          : view quality score (0–4)
+      - condition     : condition rating (1–5)
+      - sqft_above    : sq ft above ground
+      - sqft_basement : sq ft of basement
+      - yr_built      : year the home was built
+      - yr_renovated  : year last renovated (0 = never)
+      - street        : street address
+      - city          : city name
+      - statezip      : state and ZIP code
+      - country       : country
+
+    ## Program Contract
+    Your program MUST export exactly this function:
+
+        def run() -> dict:
+            '''Returns {"insight": str, "chart_path": str}'''
+
+    - `insight` : a substantive analytical narrative (4–8 sentences) that states the key quantitative finding, explains a plausible mechanism or cause, discusses implications for decision-makers or researchers, and notes caveats or follow-up questions worth investigating
+    - `chart_path` : absolute path to a saved PNG/JPG chart (use matplotlib with Agg backend)
+
+    Do NOT change `DATASET_PATH` — the evaluator depends on it.
+    Do NOT add interactive matplotlib calls (plt.show()).
+
+    ## Exploration requirement — MANDATORY
+    Each evolved program MUST ask a fundamentally different analytical question from the
+    parent program. Change at least ONE of:
+    - The primary grouping dimension (e.g., switch from bedrooms to city or condition)
+    - The metric being analyzed (e.g., switch from price to price-per-sqft or price premium)
+    - The type of relationship (e.g., switch from comparison to trend or correlation)
+    - The subgroup examined (e.g., filter to waterfront homes, renovated homes, or top cities)
+
+    ## Diverse analytical angles to explore (pick one not used in the parent)
+    1. **Waterfront premium**: price uplift for waterfront vs. non-waterfront homes by city
+    2. **Condition vs. price**: does condition rating predict price equally across bedroom counts?
+    3. **Age & renovation**: do recently renovated older homes outsell never-renovated new homes?
+    4. **Price per sq ft by city**: which cities offer the best value per square foot?
+    5. **View quality premium**: marginal price increase per view score point
+    6. **Basement impact**: homes with basements vs. without, controlling for total sq ft
+    7. **Seasonal pricing**: do sale prices vary significantly by month?
+    8. **Floor count effect**: single-story vs. multi-story price difference per sq ft
+    9. **Top cities by volume**: do high-volume cities have systematically higher or lower prices?
+    10. **Lot size vs. price**: at what lot size does marginal land value flatten?
+
+    ## What makes a high score
+
+    ### Insight (aim for non-obvious findings)
+    Good examples:
+    - "Waterfront homes sell for a median premium of $412,000 (2.3×) over comparable non-waterfront
+       homes, but this premium shrinks to 1.6× for homes with 4+ bedrooms, suggesting that
+       large family homes partially substitute for the waterfront lifestyle appeal. The narrowing
+       premium likely reflects the fact that buyers prioritizing indoor living space weight square
+       footage more heavily than views, while the waterfront premium is most pronounced for
+       smaller homes where outdoor amenity is relatively more valuable. Sellers of waterfront
+       properties with large footprints may therefore be over-attributing value to the waterfront
+       location when pricing, and should benchmark against similarly sized non-waterfront homes
+       rather than smaller waterfront comparables."
+    - "Homes renovated after 2000 but built before 1960 fetch $45,000 more on average than
+       similar-sized homes built after 2000 without renovation, implying buyers pay a character
+       premium for historic fabric combined with modern systems. This pattern — older bones,
+       newer finishes — appears to command more than either vintage alone, suggesting that
+       renovation preserving original architectural details while updating kitchens and baths
+       represents a higher-return strategy than new construction in this market. Developers
+       should investigate whether this premium holds after controlling for lot size and location,
+       as the signal may be confounded by historic neighborhoods commanding both character
+       premiums and location premiums simultaneously."
+
+    Bad examples (too obvious, score low):
+    - "Larger homes cost more."
+    - "Waterfront homes are more expensive."
+
+    ### Chart
+    - Use matplotlib (Agg backend, save with plt.savefig)
+    - Choose the chart type that best shows the claim
+    - Include title, labeled axes, and legend when needed
+    - Highlight the key finding visually (color, annotation, reference line)
+    - Figure size: at least 10×5, dpi=150
+
+    ### Alignment
+    The chart must directly visualize what the insight claims.
+
+    ## Allowed libraries
+    matplotlib, pandas, numpy, csv (stdlib), collections (stdlib), re (stdlib).
+    Do NOT use seaborn, plotly, bokeh, or any library not in the approved list.
+
+    ## Common pandas pitfalls to avoid
+    - `.index` is a PROPERTY, not a method. Write `df.index.tolist()`, NEVER `df.index()`.
+    - Use `series.idxmax()` to get the label of the max value.
+    - Always call `pd.to_numeric(..., errors='coerce')` before numeric operations on CSV columns.
+
+evaluator:
+  timeout: 180
+
+monitor:
+  enabled: true
+  port: 8765
+  host: "127.0.0.1"
+
+human_feedback_enabled: true

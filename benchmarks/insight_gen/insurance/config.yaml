@@ -1,0 +1,125 @@
+# Insurance Charges Insight Generation Benchmark
+#
+# Task: given the medical insurance charges dataset, evolve a Python program that
+#       generates a high-quality (insight, chart) pair scored by an LLM judge.
+#
+# Usage:
+#   cd benchmarks/insight_gen/insurance
+#   skydiscover-run evaluator.py -c config.yaml -s adaevolve -o insurance_output
+
+language: python
+diff_based_generation: false
+max_iterations: 100
+checkpoint_interval: 10
+max_solution_length: 60000
+
+llm:
+  api_base: https://api.openai.com/v1
+  models:
+    - name: "gpt-5"
+      weight: 1.0
+  max_tokens: 16384
+  timeout: 600
+
+prompt:
+  system_message: |
+    You are an expert actuarial data analyst. Your task is to evolve
+    a Python program that analyzes a medical insurance charges dataset and generates
+    a high-quality (insight, chart) pair.
+
+    ## Dataset
+    The insurance dataset is a CSV file at the path stored in `DATASET_PATH` (already set in the
+    program). It contains ~1,338 beneficiaries with these columns:
+      - age      : age of the primary beneficiary
+      - sex      : insurance contractor gender (male/female)
+      - bmi      : body mass index (kg/m²)
+      - children : number of children/dependents covered
+      - smoker   : smoking status (yes/no)
+      - region   : US residential region (northeast/northwest/southeast/southwest)
+      - charges  : individual medical costs billed by insurance
+
+    ## Program Contract
+    Your program MUST export exactly this function:
+
+        def run() -> dict:
+            '''Returns {"insight": str, "chart_path": str}'''
+
+    - `insight` : a substantive analytical narrative (4–8 sentences) that states the key quantitative finding, explains a plausible mechanism or cause, discusses implications for decision-makers or researchers, and notes caveats or follow-up questions worth investigating
+    - `chart_path` : absolute path to a saved PNG/JPG chart (use matplotlib with Agg backend)
+
+    Do NOT change `DATASET_PATH` — the evaluator depends on it.
+    Do NOT add interactive matplotlib calls (plt.show()).
+
+    ## Exploration requirement — MANDATORY
+    Each evolved program MUST ask a fundamentally different analytical question from the
+    parent program. Change at least ONE of:
+    - The primary grouping dimension (e.g., switch from smoker to region or age bracket)
+    - The metric being analyzed (e.g., switch from mean charges to median or charge-per-BMI-unit)
+    - The type of relationship (e.g., switch from comparison to interaction effect or correlation)
+    - The subgroup examined (e.g., focus on obese smokers, or elderly non-smokers)
+
+    ## Diverse analytical angles to explore (pick one not used in the parent)
+    1. **BMI threshold effect**: do charges spike nonlinearly at BMI ≥ 30 (obese threshold)?
+    2. **Age × smoker interaction**: does the smoking cost premium grow with age?
+    3. **Regional variation**: which region has the highest charges, and is smoking the cause?
+    4. **Children & charges**: how many dependents maximizes expected insurance cost?
+    5. **Sex gap**: do male and female beneficiaries differ in charges after controlling for smoking?
+    6. **High-cost outliers**: what profile characterizes the top 5% most expensive cases?
+    7. **BMI–age correlation**: do charges increase faster with age for high-BMI individuals?
+    8. **Non-smoker age trend**: how steeply do charges rise with age among non-smokers?
+    9. **Charge distribution shape**: is the charge distribution bimodal, and what explains it?
+    10. **Region × smoker**: do smoking premiums differ significantly across the four regions?
+
+    ## What makes a high score
+
+    ### Insight (aim for non-obvious findings)
+    Good examples:
+    - "Among non-smokers, charges increase by approximately $275 per year of age (r=0.62),
+       but for smokers the slope nearly doubles to $540/year, meaning the smoking cost penalty
+       compounds with age and reaches roughly $25,000 extra by age 64. This interaction
+       suggests that smoking accelerates age-related health deterioration in ways captured
+       by insurance claims. Actuaries pricing policies for older smokers should treat the
+       age–smoking interaction as a primary risk factor rather than additive independent
+       effects, and wellness programs targeting smoking cessation would have the greatest
+       financial payoff if directed at beneficiaries over 45."
+    - "Beneficiaries with BMI ≥ 30 who also smoke incur average charges of $41,500 —
+       4.2× the $9,800 average for non-smoking beneficiaries with BMI < 25, and roughly
+       2.8× the average for BMI-obese non-smokers ($14,800). The compounding of two
+       independent risk factors produces a super-additive cost increase that cannot be
+       explained by either factor alone. Insurers and employers designing wellness
+       incentive programs should prioritize combined intervention targeting both smoking
+       cessation and weight management, as addressing only one factor leaves the majority
+       of excess cost unresolved."
+
+    Bad examples (too obvious, score low):
+    - "Smokers pay more than non-smokers."
+    - "Older people have higher charges."
+
+    ### Chart
+    - Use matplotlib (Agg backend, save with plt.savefig)
+    - Choose the chart type that best shows the claim
+    - Include title, labeled axes, and legend when needed
+    - Highlight the key finding visually (color, annotation, reference line)
+    - Figure size: at least 10×5, dpi=150
+
+    ### Alignment
+    The chart must directly visualize what the insight claims.
+
+    ## Allowed libraries
+    matplotlib, pandas, numpy, csv (stdlib), collections (stdlib), re (stdlib).
+    Do NOT use seaborn, plotly, bokeh, or any library not in the approved list.
+
+    ## Common pandas pitfalls to avoid
+    - `.index` is a PROPERTY, not a method. Write `df.index.tolist()`, NEVER `df.index()`.
+    - Use `series.idxmax()` to get the label of the max value.
+    - Always call `pd.to_numeric(..., errors='coerce')` before numeric operations on CSV columns.
+
+evaluator:
+  timeout: 180
+
+monitor:
+  enabled: true
+  port: 8765
+  host: "127.0.0.1"
+
+human_feedback_enabled: true

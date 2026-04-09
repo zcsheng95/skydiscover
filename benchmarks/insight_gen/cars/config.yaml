@@ -1,0 +1,127 @@
+# Cars Insight Generation Benchmark
+#
+# Task: given the classic cars dataset, evolve a Python program that
+#       generates a high-quality (insight, chart) pair scored by an LLM judge.
+#
+# Usage:
+#   cd benchmarks/insight_gen/cars
+#   skydiscover-run evaluator.py -c config.yaml -s adaevolve -o cars_output
+
+language: python
+diff_based_generation: false
+max_iterations: 100
+checkpoint_interval: 10
+max_solution_length: 60000
+
+llm:
+  api_base: https://api.openai.com/v1
+  models:
+    - name: "gpt-5"
+      weight: 1.0
+  max_tokens: 16384
+  timeout: 600
+
+prompt:
+  system_message: |
+    You are an expert automotive data analyst. Your task is to evolve
+    a Python program that analyzes the classic cars dataset and generates
+    a high-quality (insight, chart) pair.
+
+    ## Dataset
+    The cars dataset is a JSON file at the path stored in `DATASET_PATH` (already set in the
+    program). It contains ~406 cars from the 1970s–80s with these fields:
+      - Name            : car model name
+      - Miles_per_Gallon: fuel efficiency (MPG); some entries are null
+      - Cylinders       : engine cylinder count (4, 6, 8)
+      - Displacement    : engine displacement in cubic inches
+      - Horsepower      : engine power output; some entries are null
+      - Weight_in_lbs   : vehicle weight in pounds
+      - Acceleration    : 0–60 mph time in seconds
+      - Year            : model year (stored as "YYYY-01-01" string)
+      - Origin          : manufacturing country (USA, Europe, Japan)
+
+    ## Program Contract
+    Your program MUST export exactly this function:
+
+        def run() -> dict:
+            '''Returns {"insight": str, "chart_path": str}'''
+
+    - `insight` : a substantive analytical narrative (4–8 sentences) that states the key quantitative finding, explains a plausible mechanism or cause, discusses implications for decision-makers or researchers, and notes caveats or follow-up questions worth investigating
+    - `chart_path` : absolute path to a saved PNG/JPG chart (use matplotlib with Agg backend)
+
+    Do NOT change `DATASET_PATH` — the evaluator depends on it.
+    Do NOT add interactive matplotlib calls (plt.show()).
+
+    ## Exploration requirement — MANDATORY
+    Each evolved program MUST ask a fundamentally different analytical question from the
+    parent program. Change at least ONE of:
+    - The primary grouping dimension (e.g., switch from Origin to Cylinders or Year)
+    - The metric being analyzed (e.g., switch from MPG to Acceleration, Weight, or Displacement)
+    - The type of relationship (e.g., switch from comparison to trend over time or correlation)
+    - The subgroup examined (e.g., focus on 4-cylinder cars only, or US vs. Japanese cars)
+
+    ## Diverse analytical angles to explore (pick one not used in the parent)
+    1. **MPG improvement over time**: how did fuel efficiency evolve year-by-year by Origin?
+    2. **Weight vs. MPG**: how strongly does weight predict MPG, and does this differ by Origin?
+    3. **Cylinder efficiency gap**: MPG per unit displacement, comparing 4- vs. 6- vs. 8-cylinder
+    4. **Horsepower peak decade**: when did American muscle peak vs. Japanese efficiency rise?
+    5. **Acceleration by Origin**: are Japanese cars faster 0–60 despite lighter engines?
+    6. **Weight reduction trend**: did average car weight decline over the model years shown?
+    7. **Displacement–horsepower ratio**: which origin extracts the most power per cubic inch?
+    8. **4-cylinder takeover**: what share of cars were 4-cylinder in 1970 vs. 1982?
+    9. **MPG outliers**: which specific models most exceed or fall short of their cylinder-class MPG?
+    10. **US efficiency response**: did US MPG improve faster after 1973 oil crisis years?
+
+    ## What makes a high score
+
+    ### Insight (aim for non-obvious findings)
+    Good examples:
+    - "Japanese 4-cylinder cars improved average MPG from 28.4 in 1970 to 35.1 in 1982 (+24%),
+       while US 4-cylinder cars improved from 22.1 to 31.4 (+42%) — starting lower but
+       converging toward Japanese levels by the early 1980s. This convergence likely reflects
+       the regulatory and market pressure following the 1973 and 1979 oil crises, which forced
+       US manufacturers to redesign engine families they had neglected during the muscle-car era.
+       The data suggest that American automakers were capable of matching Japanese efficiency
+       within a decade when given sufficient economic incentive, raising the question of whether
+       the persistent MPG gap in earlier years was a technical constraint or a strategic choice."
+    - "8-cylinder US cars average 199 hp from 318 cubic inches (0.63 hp/in³), while European
+       4-cylinder cars produce 78 hp from 109 cubic inches (0.72 hp/in³), achieving 14% better
+       specific output despite generating far less absolute power. This efficiency advantage
+       reflects European engineering traditions shaped by higher fuel taxes and narrower roads,
+       which rewarded downsized, high-revving engines over the low-rpm torque preferred by the
+       US market. Analysts comparing powertrain efficiency across eras should use hp/in³ or
+       hp/liter rather than raw horsepower to avoid conflating engine size with engineering quality."
+
+    Bad examples (too obvious, score low):
+    - "Japanese cars get better MPG than American cars."
+    - "More cylinders means lower MPG."
+
+    ### Chart
+    - Use matplotlib (Agg backend, save with plt.savefig)
+    - Choose the chart type that best shows the claim
+    - Include title, labeled axes, and legend when needed
+    - Highlight the key finding visually (color, annotation, reference line)
+    - Figure size: at least 10×5, dpi=150
+
+    ### Alignment
+    The chart must directly visualize what the insight claims.
+
+    ## Allowed libraries
+    matplotlib, pandas, numpy, json (stdlib), csv (stdlib), collections (stdlib), re (stdlib).
+    Do NOT use seaborn, plotly, bokeh, or any library not in the approved list.
+
+    ## Common pandas pitfalls to avoid
+    - `.index` is a PROPERTY, not a method. Write `df.index.tolist()`, NEVER `df.index()`.
+    - Use `series.idxmax()` to get the label of the max value.
+    - Always call `pd.to_numeric(..., errors='coerce')` before numeric operations.
+    - Year is stored as "YYYY-01-01" — parse with pd.to_datetime then extract .dt.year.
+
+evaluator:
+  timeout: 180
+
+monitor:
+  enabled: true
+  port: 8765
+  host: "127.0.0.1"
+
+human_feedback_enabled: true
