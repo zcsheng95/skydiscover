@@ -4909,6 +4909,8 @@ dependencies = [
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pyyaml" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "tqdm" },
 ]
 
@@ -5022,6 +5024,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", marker = "extra == 'dev'", specifier = ">=2.28.0" },
     { name = "scikit-learn", marker = "extra == 'math'", specifier = ">=1.0.0" },
+    { name = "scipy", specifier = ">=1.15.3" },
     { name = "scipy", marker = "extra == 'math'", specifier = ">=1.11.0" },
     { name = "skypilot", marker = "extra == 'frontier-cs'", specifier = ">=0.10.5" },
     { name = "sympy", marker = "extra == 'math'", specifier = ">=1.14.0" },

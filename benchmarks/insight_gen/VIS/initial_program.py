@@ -43,9 +43,8 @@ def run() -> dict:
     df = load_data()
 
     # Average CrossRef citations per year
-    # NOTE: .index is a property, not a method — never write .index()
     yearly = df.groupby("Year")["CitationCount_CrossRef"].mean().sort_index()
-    years = yearly.index.tolist()          # correct: .index (property) then .tolist()
+    years = yearly.index.tolist()        
     avg_cites = yearly.values.tolist()
 
     peak_year = yearly.idxmax()
