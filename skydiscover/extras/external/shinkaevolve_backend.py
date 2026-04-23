@@ -47,7 +47,7 @@ def _map_config(config: Config, iterations: Optional[int], evaluator_path: str, 
 
     # EvolutionConfig
     evo_kwargs: Dict[str, Any] = {
-        "num_generations": iterations or config.max_iterations,
+        "num_generations": iterations if iterations is not None else config.max_iterations,
         "results_dir": output_dir,
         "job_type": "local",
         "language": getattr(config, "language", None) or "python",

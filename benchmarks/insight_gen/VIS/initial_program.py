@@ -9,6 +9,7 @@ Exports: run() -> dict with 'insight' (str) and 'chart_path' (str)
 
 import os
 import tempfile
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
@@ -16,9 +17,14 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 # Path to the VIS dataset — keep this unchanged when evolving
+def _default_dataset_path() -> str:
+    """Resolve the bundled VIS dataset path relative to this benchmark."""
+    return str(Path(__file__).resolve().parent / "data" / "VIS.csv")
+
+
 DATASET_PATH = os.environ.get(
     "VIS_DATASET_PATH",
-    "/home/zhecheng/insight-scaling/data/VIS.csv",
+    _default_dataset_path(),
 )
 
 

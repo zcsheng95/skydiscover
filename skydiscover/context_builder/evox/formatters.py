@@ -422,13 +422,22 @@ def format_search_window_context(context: Dict[str, Any]) -> str:
     """Format the current search window context from context['search_stats']."""
     stats = context.get("search_stats") or {}
     window_start = int(stats.get("window_start_iteration") or 0)
-    total = int(stats.get("total_iterations") or 100)
+    total = stats.get("total_iterations")
     horizon = int(stats.get("search_window_horizon", 0))
     improvement_threshold = float(stats.get("improvement_threshold") or 0.0)
 
     lines = []
 
-    window_line = f"- Your newly designed search algorithm will start at iteration {window_start} out of {total}."
+    if total is None:
+        window_line = (
+            f"- Your newly designed search algorithm will start at iteration {window_start} "
+            "in an open-ended run."
+        )
+    else:
+        window_line = (
+            f"- Your newly designed search algorithm will start at iteration {window_start} "
+            f"out of {int(total)}."
+        )
     if horizon > 0:
         if improvement_threshold > 0:
             window_line += f" It will run for at least {horizon} iterations (potentially more if improving), but will be cut to just {horizon} iterations if it fails to improve the solution score by more than {improvement_threshold:.4f}."

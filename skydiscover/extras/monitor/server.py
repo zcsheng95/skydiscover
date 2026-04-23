@@ -4,8 +4,9 @@ WebSocket + HTTP server for the live monitor dashboard.
 Single port, zero extra dependencies beyond Python stdlib + optional websockets.
 Uses raw asyncio TCP so it works regardless of websockets version.
 
-HTTP GET /  → serves dashboard.html
-WS upgrade  → real-time event stream
+HTTP GET /        → serves the VIS-style dashboard
+HTTP GET /legacy  → serves the legacy monitor dashboard
+WS upgrade        → real-time event stream
 """
 
 import asyncio
@@ -22,12 +23,30 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
+
+from skydiscover.extras.monitor.trace_store import (
+    CandidateTraceStore,
+    trace_record_to_monitor_program,
+)
 
 logger = logging.getLogger(__name__)
 
 DASHBOARD_PATH = Path(__file__).parent / "dashboard.html"
+VIS_DASHBOARD_PATH = Path(__file__).parent / "dashboard_vis.html"
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+PROXIED_CLIENT_MESSAGE_TYPES = {
+    "request_program_solution",
+    "set_feedback",
+    "clear_feedback",
+    "request_feedback_state",
+    "set_human_feedback_mode",
+    "request_system_prompt",
+    "request_human_feedback_history",
+    "request_image",
+    "request_program_summary",
+    "request_summary",
+}
 
 
 def _ws_accept_key(client_key: str) -> str:
@@ -88,22 +107,34 @@ class MonitorServer:
     """
     Single-port HTTP+WebSocket server for live solution discovery monitoring.
 
-    - GET /  →  dashboard.html
-    - WS upgrade  →  event broadcast
+    - GET /        →  VIS dashboard
+    - GET /legacy  →  legacy dashboard
+    - WS upgrade   →  event broadcast
     Runs in a daemon thread with its own asyncio event loop.
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8765, max_solution_length: int = 10000):
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8765,
+        max_solution_length: int = 10000,
+        output_dir: Optional[str] = None,
+    ):
         self.host = host
         self.port = port
         self.max_solution_length = max_solution_length
+        self.output_dir = output_dir
 
         self._queue: queue.Queue = queue.Queue()
+        self._trace_store: Optional[CandidateTraceStore] = (
+            CandidateTraceStore(output_dir) if output_dir else None
+        )
 
         # In-memory state for reconnecting clients
         self._programs: List[Dict[str, Any]] = []
         self._program_solutions: Dict[str, str] = {}
         self._parent_solutions: Dict[str, str] = {}
+        self._trace_records_by_id: Dict[str, Dict[str, Any]] = {}
         self._best_program_id: Optional[str] = None
         self._best_score: float = -float("inf")
         self._stats: Dict[str, Any] = {}
@@ -114,6 +145,14 @@ class MonitorServer:
 
         # Human feedback reader (set via set_feedback_reader)
         self._feedback_reader: Optional[Any] = None
+        self._feedback_state_cache: Dict[str, Any] = {
+            "human_feedback_enabled": False,
+            "feedback_text": "",
+            "feedback_active": False,
+            "human_feedback_mode": "append",
+            "human_feedback_current_prompt": "",
+            "human_feedback_history": [],
+        }
 
         # AI summary state
         self._summary_model: str = ""
@@ -126,6 +165,18 @@ class MonitorServer:
         self._summary_last_program_count: int = 0
         self._summary_executor: Optional[ThreadPoolExecutor] = None
 
+        self._last_event_at: Optional[float] = None
+        self._dashboards: Dict[str, bytes] = {}
+        self._start_handler: Optional[Callable[[], None]] = None
+        self._stop_handler: Optional[Callable[[], None]] = None
+        self._resume_handler: Optional[Callable[[], None]] = None
+        self._branch_handler: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
+        self._request_proxy: Optional[Callable[[Dict[str, Any]], Any]] = None
+        self._run_state_provider: Optional[Callable[[], Dict[str, Any]]] = None
+        self._run_label_provider: Optional[Callable[[], str]] = None
+        self._series_label_provider: Optional[Callable[[Optional[Dict[str, Any]]], str]] = None
+        self._solution_provider: Optional[Callable[[str], Any]] = None
+
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._clients: Set[asyncio.StreamWriter] = set()
@@ -136,6 +187,7 @@ class MonitorServer:
     def start(self) -> None:
         """Load the dashboard and start the server in a daemon thread."""
         self._load_dashboard()
+        self._load_trace_replay_state()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
         # Wait until TCP port is actually bound (up to 5s)
@@ -176,6 +228,46 @@ class MonitorServer:
         """Attach a HumanFeedbackReader for dashboard human feedback controls."""
         self._feedback_reader = reader
 
+    def set_start_handler(self, handler: Optional[Callable[[], None]]) -> None:
+        """Attach a start handler for launcher-style monitor modes."""
+        self._start_handler = handler
+
+    def set_stop_handler(self, handler: Optional[Callable[[], None]]) -> None:
+        """Attach a graceful-stop handler for the current live run."""
+        self._stop_handler = handler
+
+    def set_resume_handler(self, handler: Optional[Callable[[], None]]) -> None:
+        """Attach a resume handler for paused live runs."""
+        self._resume_handler = handler
+
+    def set_branch_handler(
+        self, handler: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]]
+    ) -> None:
+        """Attach a candidate-guided branch creation handler."""
+        self._branch_handler = handler
+
+    def set_request_proxy(self, handler: Optional[Callable[[Dict[str, Any]], Any]]) -> None:
+        """Attach a proxy used to forward dashboard requests elsewhere."""
+        self._request_proxy = handler
+
+    def set_run_state_provider(self, provider: Optional[Callable[[], Dict[str, Any]]]) -> None:
+        """Override how run-state metadata is resolved."""
+        self._run_state_provider = provider
+
+    def set_run_label_provider(self, provider: Optional[Callable[[], str]]) -> None:
+        """Override how the human-readable run label is resolved."""
+        self._run_label_provider = provider
+
+    def set_series_label_provider(
+        self, provider: Optional[Callable[[Optional[Dict[str, Any]]], str]]
+    ) -> None:
+        """Override how the primary plotted series label is resolved."""
+        self._series_label_provider = provider
+
+    def set_solution_provider(self, provider: Optional[Callable[[str], Any]]) -> None:
+        """Override how full per-program solutions are resolved on demand."""
+        self._solution_provider = provider
+
     def configure_summary(
         self,
         model: str = "gpt-5-mini",
@@ -207,14 +299,7 @@ class MonitorServer:
     def _get_feedback_state(self) -> Dict[str, Any]:
         """Return current human feedback state."""
         if not self._feedback_reader:
-            return {
-                "human_feedback_enabled": False,
-                "feedback_text": "",
-                "feedback_active": False,
-                "human_feedback_mode": "append",
-                "human_feedback_current_prompt": "",
-                "human_feedback_history": [],
-            }
+            return dict(self._feedback_state_cache)
         text = self._feedback_reader.read()
         return {
             "human_feedback_enabled": True,
@@ -227,12 +312,19 @@ class MonitorServer:
 
     def _build_init_state(self) -> Dict[str, Any]:
         """Build the full init_state payload for new/reconnecting WS clients."""
+        run_state = self._get_run_state()
         state = {
             "type": "init_state",
             "programs": self._programs,
             "best_program_id": self._best_program_id,
             "stats": self._stats,
             "config_summary": self._config_summary,
+            "run_label": self._get_run_label(),
+            "series_label": self._get_series_label(run_state),
+            "run_state": run_state,
+            "last_event_at": self._last_event_at,
+            "control_capabilities": self._get_control_capabilities(run_state),
+            "branch_capabilities": self._get_branch_capabilities(),
             "summary_enabled": bool(self._summary_model),
             "summary_model": self._summary_model or "",
             "summary_text": self._summary_text,
@@ -241,14 +333,247 @@ class MonitorServer:
         state.update(self._get_feedback_state())
         return state
 
-    def _load_dashboard(self) -> None:
+    def _get_run_state(self) -> Dict[str, Any]:
+        """Read the latest persisted run-state metadata when available."""
+        if self._run_state_provider is not None:
+            try:
+                data = self._run_state_provider()
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                logger.debug("Custom run_state provider failed", exc_info=True)
+
+        if not self.output_dir:
+            return {}
+
+        state_path = Path(self.output_dir) / "run_state.json"
+        if not state_path.exists():
+            return {}
+
         try:
-            raw = DASHBOARD_PATH.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            logger.warning(f"Dashboard HTML not found at {DASHBOARD_PATH}")
-            raw = "<html><body><h1>Dashboard not found</h1></body></html>"
-        # No port injection needed — WS connects to the same host:port
-        self._dashboard_html = raw.encode("utf-8")
+            with open(state_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            logger.debug("Failed to read run_state.json", exc_info=True)
+        return {}
+
+    def _get_run_label(self) -> str:
+        """Return a stable human-readable run label."""
+        if self._run_label_provider is not None:
+            try:
+                label = self._run_label_provider()
+                if isinstance(label, str) and label:
+                    return label
+            except Exception:
+                logger.debug("Custom run_label provider failed", exc_info=True)
+        if self.output_dir:
+            return Path(self.output_dir).name
+        return "live-run"
+
+    def _get_series_label(self, run_state: Optional[Dict[str, Any]] = None) -> str:
+        """Return the primary series label for live monitors."""
+        if self._series_label_provider is not None:
+            try:
+                label = self._series_label_provider(run_state)
+                if isinstance(label, str) and label:
+                    return label
+            except Exception:
+                logger.debug("Custom series_label provider failed", exc_info=True)
+        run_state = run_state or self._get_run_state()
+        search_type = run_state.get("search_type")
+        if isinstance(search_type, str) and search_type:
+            return search_type
+        if self._config_summary:
+            return self._config_summary.split("|", 1)[0].strip()
+        return "skydiscover"
+
+    def _get_program_solution_pair(self, program_id: str) -> tuple[str, str]:
+        solution = self._program_solutions.get(program_id, "")
+        parent_solution = self._parent_solutions.get(program_id, "")
+
+        if self._solution_provider is not None:
+            try:
+                provided = self._solution_provider(program_id)
+            except Exception:
+                logger.debug("Custom solution provider failed for %s", program_id, exc_info=True)
+            else:
+                if isinstance(provided, (list, tuple)) and len(provided) >= 2:
+                    provided_solution, provided_parent_solution = provided[0], provided[1]
+                    if isinstance(provided_solution, str):
+                        solution = provided_solution
+                    if isinstance(provided_parent_solution, str):
+                        parent_solution = provided_parent_solution
+                    self._program_solutions[program_id] = solution
+                    self._parent_solutions[program_id] = parent_solution
+
+        if not solution and self._trace_store is not None:
+            record = self._trace_records_by_id.get(program_id)
+            solution = self._trace_store.load_solution(program_id, record=record)
+            if solution:
+                self._program_solutions[program_id] = solution
+
+        if not parent_solution:
+            record = self._trace_records_by_id.get(program_id)
+            if isinstance(record, dict):
+                parent_id = record.get("parent_id")
+                if isinstance(parent_id, str) and parent_id:
+                    parent_solution = self._program_solutions.get(parent_id, "")
+                    if not parent_solution and self._trace_store is not None:
+                        parent_record = self._trace_records_by_id.get(parent_id)
+                        parent_solution = self._trace_store.load_solution(
+                            parent_id,
+                            record=parent_record,
+                        )
+                    if parent_solution:
+                        self._parent_solutions[program_id] = parent_solution
+
+        return solution, parent_solution
+
+    def _load_trace_replay_state(self) -> None:
+        """Best-effort replay of persisted candidate history for this run."""
+        if self._trace_store is None or not self._trace_store.has_trace():
+            return
+
+        try:
+            records = self._trace_store.load_candidate_records()
+        except Exception:
+            logger.warning("Failed to load monitor trace replay for %s", self.output_dir, exc_info=True)
+            return
+
+        if not records:
+            return
+
+        programs: List[Dict[str, Any]] = []
+        program_solutions: Dict[str, str] = {}
+        parent_solutions: Dict[str, str] = {}
+        trace_records_by_id: Dict[str, Dict[str, Any]] = {}
+        best_program_id: Optional[str] = None
+        best_score = -float("inf")
+        best_iteration = 0
+        last_event_at: Optional[float] = None
+
+        records_by_id = {
+            str(record.get("program_id") or ""): record
+            for record in records
+            if isinstance(record, dict) and record.get("program_id")
+        }
+
+        for record in records:
+            program = trace_record_to_monitor_program(record)
+            program_id = str(program.get("id") or "").strip()
+            if not program_id:
+                continue
+
+            programs.append(program)
+            trace_records_by_id[program_id] = dict(record)
+
+            solution = self._trace_store.load_solution(program_id, record=record)
+            program_solutions[program_id] = solution
+
+            parent_id = record.get("parent_id")
+            if isinstance(parent_id, str) and parent_id:
+                parent_record = records_by_id.get(parent_id)
+                if parent_record is not None:
+                    parent_solutions[program_id] = self._trace_store.load_solution(
+                        parent_id,
+                        record=parent_record,
+                    )
+
+            score = program.get("score", 0.0)
+            if isinstance(score, (int, float)) and score >= best_score:
+                best_score = float(score)
+                best_program_id = program_id
+                best_iteration = int(program.get("iteration") or 0)
+
+            timestamp = record.get("timestamp")
+            if isinstance(timestamp, (int, float)):
+                if last_event_at is None or float(timestamp) > last_event_at:
+                    last_event_at = float(timestamp)
+
+        if not programs:
+            return
+
+        current_iteration = max(
+            int(program.get("iteration") or 0) for program in programs
+        )
+        stats = {
+            "total_programs": len(programs),
+            "current_iteration": current_iteration,
+            "best_score": 0.0 if best_score == -float("inf") else best_score,
+            "iterations_since_improvement": max(0, current_iteration - best_iteration),
+            "programs_per_min": 0.0,
+            "elapsed_seconds": 0.0,
+        }
+
+        self._replace_cached_state(
+            {
+                "programs": programs,
+                "program_solutions": program_solutions,
+                "parent_solutions": parent_solutions,
+                "best_program_id": best_program_id,
+                "stats": stats,
+                "last_event_at": last_event_at,
+            }
+        )
+        self._trace_records_by_id = trace_records_by_id
+        logger.info(
+            "Replayed %s historical candidate(s) from %s",
+            len(programs),
+            self._trace_store.records_path,
+        )
+
+    def _get_control_capabilities(self, run_state: Optional[Dict[str, Any]] = None) -> Dict[str, bool]:
+        """Return which run-control actions are currently wired."""
+        run_state = run_state or self._get_run_state()
+        status = run_state.get("status")
+        can_start = self._start_handler is not None and status in {
+            None,
+            "",
+            "idle",
+            "paused",
+            "completed",
+            "failed",
+            "early_stopping",
+        }
+        can_stop = self._stop_handler is not None and status not in {
+            "paused",
+            "completed",
+            "failed",
+            "early_stopping",
+            "idle",
+            "starting",
+        }
+        can_resume = self._resume_handler is not None and status == "paused"
+        return {
+            "start": can_start,
+            "resume": can_resume,
+            "stop": can_stop,
+        }
+
+    def _get_branch_capabilities(self) -> Dict[str, bool]:
+        """Return which branch actions are available in the current monitor mode."""
+        return {
+            "create": self._branch_handler is not None,
+        }
+
+    def _load_dashboard(self) -> None:
+        def _read_html(path: Path, fallback_title: str) -> bytes:
+            try:
+                return path.read_text(encoding="utf-8").encode("utf-8")
+            except FileNotFoundError:
+                logger.warning("Dashboard HTML not found at %s", path)
+                return (
+                    f"<html><body><h1>{fallback_title} not found</h1></body></html>"
+                ).encode("utf-8")
+
+        self._dashboards = {
+            "/": _read_html(VIS_DASHBOARD_PATH, "VIS dashboard"),
+            "/vis": _read_html(VIS_DASHBOARD_PATH, "VIS dashboard"),
+            "/legacy": _read_html(DASHBOARD_PATH, "Legacy dashboard"),
+        }
+        self._dashboard_html = self._dashboards["/"]
 
     def _run_loop(self) -> None:
         self._loop = asyncio.new_event_loop()
@@ -314,6 +639,10 @@ class MonitorServer:
                 writer.close()
                 return
 
+            parts = request_line.split()
+            path = parts[1] if len(parts) >= 2 else "/"
+            path = path.split("?", 1)[0]
+
             while True:
                 line = (await reader.readline()).decode("utf-8", errors="replace").strip()
                 if not line:
@@ -327,7 +656,7 @@ class MonitorServer:
             if is_ws:
                 await self._handle_ws(reader, writer, raw_headers)
             else:
-                await self._handle_http(writer)
+                await self._handle_http(writer, path)
         except Exception:
             logger.debug("Connection handler error", exc_info=True)
         finally:
@@ -336,9 +665,9 @@ class MonitorServer:
             except Exception:
                 logger.debug("Error closing writer", exc_info=True)
 
-    async def _handle_http(self, writer: asyncio.StreamWriter) -> None:
+    async def _handle_http(self, writer: asyncio.StreamWriter, path: str = "/") -> None:
         """Serve the dashboard HTML over a plain HTTP GET."""
-        html = self._dashboard_html or b""
+        html = self._dashboards.get(path) or self._dashboard_html or b""
         resp = (
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: text/html; charset=utf-8\r\n"
@@ -391,22 +720,78 @@ class MonitorServer:
         except Exception:
             return
         t = msg.get("type")
+        if (
+            self._request_proxy is not None
+            and t in PROXIED_CLIENT_MESSAGE_TYPES
+        ):
+            try:
+                proxy_result = self._request_proxy(msg)
+                if isinstance(proxy_result, dict):
+                    await self._ws_send(writer, json.dumps(proxy_result))
+                    return
+                if proxy_result:
+                    return
+            except Exception as exc:
+                logger.warning("Failed to proxy client message %s: %s", t, exc)
+
         if t == "request_full_state":
             await self._ws_send(writer, json.dumps(self._build_init_state()))
+        elif t == "request_start_run":
+            if self._start_handler is None:
+                await self._ws_send(
+                    writer,
+                    json.dumps(
+                        {
+                            "type": "run_control_ack",
+                            "action": "start",
+                            "ok": False,
+                            "message": "Start is not available in this monitor mode.",
+                            "control_capabilities": self._get_control_capabilities(),
+                        }
+                    ),
+                )
+                return
+
+            try:
+                self._start_handler()
+                await self._broadcast(
+                    json.dumps(
+                        {
+                            "type": "run_control_ack",
+                            "action": "start",
+                            "ok": True,
+                            "message": "Start requested. Preparing a new run...",
+                            "run_state": self._get_run_state(),
+                            "control_capabilities": self._get_control_capabilities(),
+                        }
+                    )
+                )
+            except Exception as exc:
+                logger.warning("Failed to request start: %s", exc)
+                await self._ws_send(
+                    writer,
+                    json.dumps(
+                        {
+                            "type": "run_control_ack",
+                            "action": "start",
+                            "ok": False,
+                            "message": f"Failed to request start: {exc}",
+                            "run_state": self._get_run_state(),
+                            "control_capabilities": self._get_control_capabilities(),
+                        }
+                    ),
+                )
         elif t == "request_program_solution":
             pid = msg.get("program_id", "")
+            solution, parent_solution = self._get_program_solution_pair(pid)
             await self._ws_send(
                 writer,
                 json.dumps(
                     {
                         "type": "program_solution",
                         "program_id": pid,
-                        "solution": self._program_solutions.get(pid, "")[
-                            : self.max_solution_length
-                        ],
-                        "parent_solution": self._parent_solutions.get(pid, "")[
-                            : self.max_solution_length
-                        ],
+                        "solution": solution,
+                        "parent_solution": parent_solution,
                     }
                 ),
             )
@@ -525,6 +910,171 @@ class MonitorServer:
             await self._generate_program_summary(writer, pid)
         elif t == "request_summary":
             await self._trigger_summary()
+        elif t == "request_stop_run":
+            if self._stop_handler is None:
+                await self._ws_send(
+                    writer,
+                    json.dumps(
+                        {
+                            "type": "run_control_ack",
+                            "action": "stop",
+                            "ok": False,
+                            "message": "Graceful stop is not available in this monitor mode.",
+                            "control_capabilities": self._get_control_capabilities(),
+                        }
+                    ),
+                )
+                return
+
+            try:
+                self._stop_handler()
+                await self._broadcast(
+                    json.dumps(
+                        {
+                            "type": "run_control_ack",
+                            "action": "stop",
+                            "ok": True,
+                            "message": "Stop requested. Waiting for the current iteration to finish.",
+                            "run_state": self._get_run_state(),
+                            "control_capabilities": self._get_control_capabilities(),
+                        }
+                    )
+                )
+            except Exception as exc:
+                logger.warning("Failed to request graceful stop: %s", exc)
+                await self._ws_send(
+                    writer,
+                    json.dumps(
+                        {
+                            "type": "run_control_ack",
+                            "action": "stop",
+                            "ok": False,
+                            "message": f"Failed to request graceful stop: {exc}",
+                            "run_state": self._get_run_state(),
+                            "control_capabilities": self._get_control_capabilities(),
+                        }
+                    ),
+                )
+        elif t == "request_resume_run":
+            if self._resume_handler is None:
+                await self._ws_send(
+                    writer,
+                    json.dumps(
+                        {
+                            "type": "run_control_ack",
+                            "action": "resume",
+                            "ok": False,
+                            "message": "Resume is not available in this monitor mode.",
+                            "control_capabilities": self._get_control_capabilities(),
+                        }
+                    ),
+                )
+                return
+
+            try:
+                self._resume_handler()
+                await self._broadcast(
+                    json.dumps(
+                        {
+                            "type": "run_control_ack",
+                            "action": "resume",
+                            "ok": True,
+                            "message": "Resume requested. Waiting for the runner to restart.",
+                            "run_state": self._get_run_state(),
+                            "control_capabilities": self._get_control_capabilities(),
+                        }
+                    )
+                )
+            except Exception as exc:
+                logger.warning("Failed to request resume: %s", exc)
+                await self._ws_send(
+                    writer,
+                    json.dumps(
+                        {
+                            "type": "run_control_ack",
+                            "action": "resume",
+                            "ok": False,
+                            "message": f"Failed to request resume: {exc}",
+                            "run_state": self._get_run_state(),
+                            "control_capabilities": self._get_control_capabilities(),
+                        }
+                    ),
+                )
+                return
+        elif t == "request_branch_from_program":
+            if self._branch_handler is None:
+                await self._ws_send(
+                    writer,
+                    json.dumps(
+                        {
+                            "type": "branch_ack",
+                            "ok": False,
+                            "message": "Candidate-guided branching is not available in this monitor mode.",
+                            "branch_capabilities": self._get_branch_capabilities(),
+                        }
+                    ),
+                )
+                return
+
+            try:
+                result = self._branch_handler(msg) or {}
+                payload = {
+                    "type": "branch_ack",
+                    "ok": True,
+                    "message": result.get(
+                        "message",
+                        "Branch requested. Preparing a candidate-seeded run.",
+                    ),
+                    "branch": result.get("branch", {}),
+                    "branch_capabilities": self._get_branch_capabilities(),
+                }
+                await self._broadcast(json.dumps(payload))
+            except Exception as exc:
+                logger.warning("Failed to request branch: %s", exc)
+                await self._ws_send(
+                    writer,
+                    json.dumps(
+                        {
+                            "type": "branch_ack",
+                            "ok": False,
+                            "message": f"Failed to create branch: {exc}",
+                            "branch_capabilities": self._get_branch_capabilities(),
+                        }
+                    ),
+                )
+                return
+
+            try:
+                if self._resume_handler is None:
+                    raise RuntimeError("Resume is not available in this monitor mode.")
+                self._resume_handler()
+                await self._broadcast(
+                    json.dumps(
+                        {
+                            "type": "run_control_ack",
+                            "action": "resume",
+                            "ok": True,
+                            "message": "Resume requested. Waiting for the runner to restart.",
+                            "run_state": self._get_run_state(),
+                            "control_capabilities": self._get_control_capabilities(),
+                        }
+                    )
+                )
+            except Exception as exc:
+                logger.warning("Failed to request resume: %s", exc)
+                await self._ws_send(
+                    writer,
+                    json.dumps(
+                        {
+                            "type": "run_control_ack",
+                            "action": "resume",
+                            "ok": False,
+                            "message": f"Failed to request resume: {exc}",
+                            "run_state": self._get_run_state(),
+                            "control_capabilities": self._get_control_capabilities(),
+                        }
+                    ),
+                )
 
     # ─── Queue consumer & broadcast ──────────────────────────
 
@@ -537,7 +1087,28 @@ class MonitorServer:
                 continue
 
             etype = event.get("type")
-            if etype == "new_program":
+            if etype == "reset_state":
+                self._reset_cached_state(clear_config_summary=False)
+                await self._broadcast(json.dumps(self._build_init_state()))
+                continue
+            elif etype == "replace_state":
+                self._replace_cached_state(event)
+                await self._broadcast(json.dumps(self._build_init_state()))
+                continue
+            elif etype == "new_program":
+                active_run_label = self._get_run_label()
+                if not self._event_matches_active_run(event, active_run_label=active_run_label):
+                    stale_program = event.get("program", {})
+                    stale_run_label = self._get_program_run_label(stale_program) or event.get(
+                        "run_label"
+                    )
+                    logger.warning(
+                        "Dropping stale monitor event for run '%s' while active run is '%s'.",
+                        stale_run_label,
+                        active_run_label,
+                    )
+                    continue
+                self._last_event_at = time.time()
                 p = event.get("program", {})
                 # Annotate with human feedback state for replay on reconnect
                 if self._feedback_reader:
@@ -545,8 +1116,18 @@ class MonitorServer:
                     p["human_feedback_active"] = bool(fb)
                 else:
                     p["human_feedback_active"] = False
-                self._programs.append(p)
+                p.setdefault("series_label", self._get_series_label())
+                p.setdefault("run_label", self._get_run_label())
                 pid = p.get("id", "")
+                replaced = False
+                if pid:
+                    for index, existing in enumerate(self._programs):
+                        if isinstance(existing, dict) and existing.get("id") == pid:
+                            self._programs[index] = p
+                            replaced = True
+                            break
+                if not replaced:
+                    self._programs.append(p)
                 if "full_solution" in event:
                     self._program_solutions[pid] = event["full_solution"]
                 if "parent_full_solution" in event:
@@ -563,11 +1144,65 @@ class MonitorServer:
                     self._best_program_id = pid
                     self._best_score = max(self._best_score, new_score)
                 self._stats = event.get("stats", self._stats)
+            elif etype == "program_solution":
+                pid = event.get("program_id", "")
+                if pid:
+                    self._program_solutions[pid] = event.get("solution", "")
+                    self._parent_solutions[pid] = event.get("parent_solution", "")
+            elif etype == "program_summary":
+                pid = event.get("program_id", "")
+                if pid:
+                    self._program_summary_cache[pid] = event.get("summary", "")
+            elif etype == "feedback_ack":
+                self._feedback_state_cache["human_feedback_enabled"] = event.get(
+                    "human_feedback_enabled",
+                    self._feedback_state_cache.get("human_feedback_enabled", True),
+                )
+                self._feedback_state_cache["feedback_text"] = event.get(
+                    "feedback_text",
+                    self._feedback_state_cache.get("feedback_text", ""),
+                )
+                self._feedback_state_cache["feedback_active"] = event.get(
+                    "feedback_active",
+                    self._feedback_state_cache.get("feedback_active", False),
+                )
+                self._feedback_state_cache["human_feedback_mode"] = event.get(
+                    "human_feedback_mode",
+                    self._feedback_state_cache.get("human_feedback_mode", "append"),
+                )
+            elif etype == "human_feedback_mode_ack":
+                self._feedback_state_cache["human_feedback_mode"] = event.get(
+                    "human_feedback_mode",
+                    self._feedback_state_cache.get("human_feedback_mode", "append"),
+                )
+            elif etype == "system_prompt":
+                self._feedback_state_cache["human_feedback_current_prompt"] = event.get(
+                    "prompt_text",
+                    self._feedback_state_cache.get("human_feedback_current_prompt", ""),
+                )
+            elif etype == "human_feedback_history":
+                self._feedback_state_cache["human_feedback_history"] = event.get("history", [])
+            elif etype == "summary_update":
+                self._summary_text = event.get("summary_text", self._summary_text)
+                self._summary_generating = event.get(
+                    "summary_generating", self._summary_generating
+                )
+                if "summary_enabled" in event and not event.get("summary_enabled"):
+                    self._summary_model = ""
+            elif etype == "discovery_complete":
+                self._last_event_at = time.time()
 
             # Strip full_solution from broadcast (clients request on demand)
             broadcast = {
                 k: v for k, v in event.items() if k not in ("full_solution", "parent_full_solution")
             }
+            broadcast["run_state"] = self._get_run_state()
+            broadcast["run_label"] = self._get_run_label()
+            broadcast["series_label"] = self._get_series_label(broadcast["run_state"])
+            broadcast["last_event_at"] = self._last_event_at
+            broadcast["control_capabilities"] = self._get_control_capabilities(
+                broadcast["run_state"]
+            )
             # Include current human feedback status in program events
             if etype == "new_program" and self._feedback_reader:
                 fb = self._feedback_reader.read()
@@ -586,6 +1221,124 @@ class MonitorServer:
                 count = len(self._programs)
                 if count - self._summary_last_program_count >= self._summary_interval:
                     await self._trigger_summary()
+
+    def _reset_cached_state(self, *, clear_config_summary: bool = False) -> None:
+        """Clear cached run data while keeping dashboard services alive."""
+        self._programs = []
+        self._program_solutions = {}
+        self._parent_solutions = {}
+        self._trace_records_by_id = {}
+        self._best_program_id = None
+        self._best_score = -float("inf")
+        self._stats = {}
+        self._program_summary_cache = {}
+        self._summary_model = ""
+        self._summary_text = ""
+        self._summary_generating = False
+        self._feedback_state_cache = {
+            "human_feedback_enabled": False,
+            "feedback_text": "",
+            "feedback_active": False,
+            "human_feedback_mode": "append",
+            "human_feedback_current_prompt": "",
+            "human_feedback_history": [],
+        }
+        self._last_event_at = None
+        if clear_config_summary:
+            self._config_summary = ""
+
+    def _replace_cached_state(self, state: Dict[str, Any]) -> None:
+        """Replace cached monitor state from an external snapshot."""
+        self._programs = self._filter_programs_for_active_run(list(state.get("programs", [])))
+        self._program_solutions = dict(state.get("program_solutions", {}))
+        self._parent_solutions = dict(state.get("parent_solutions", {}))
+        self._trace_records_by_id = dict(state.get("trace_records_by_id", {}))
+        self._best_program_id = state.get("best_program_id")
+        self._stats = dict(state.get("stats", {}))
+        self._last_event_at = state.get("last_event_at", self._last_event_at)
+        if "config_summary" in state:
+            self._config_summary = state.get("config_summary", self._config_summary)
+        self._summary_model = state.get("summary_model", self._summary_model or "")
+        self._summary_text = state.get("summary_text", self._summary_text)
+        self._summary_generating = state.get("summary_generating", self._summary_generating)
+        self._feedback_state_cache = {
+            "human_feedback_enabled": state.get("human_feedback_enabled", False),
+            "feedback_text": state.get("feedback_text", ""),
+            "feedback_active": state.get("feedback_active", False),
+            "human_feedback_mode": state.get("human_feedback_mode", "append"),
+            "human_feedback_current_prompt": state.get("human_feedback_current_prompt", ""),
+            "human_feedback_history": state.get("human_feedback_history", []),
+        }
+
+        valid_program_ids = {
+            program.get("id") for program in self._programs if isinstance(program, dict) and program.get("id")
+        }
+        if self._best_program_id not in valid_program_ids:
+            self._best_program_id = None
+
+        self._best_score = -float("inf")
+        best_program_id: Optional[str] = self._best_program_id
+        for program in self._programs:
+            score = program.get("score", 0)
+            if isinstance(score, (int, float)) and score > self._best_score:
+                self._best_score = score
+                best_program_id = program.get("id")
+        if self._best_score == -float("inf"):
+            self._best_score = 0.0
+        self._best_program_id = best_program_id
+
+    def _get_program_run_label(self, program: Any) -> Optional[str]:
+        """Return the run label embedded in a program payload, if any."""
+        if not isinstance(program, dict):
+            return None
+        run_label = program.get("run_label")
+        if isinstance(run_label, str) and run_label:
+            return run_label
+        return None
+
+    def _event_matches_active_run(
+        self, event: Dict[str, Any], *, active_run_label: Optional[str] = None
+    ) -> bool:
+        """Return ``True`` when an event belongs to the currently active run."""
+        current_run_label = active_run_label or self._get_run_label()
+        if not current_run_label:
+            return True
+
+        program = event.get("program")
+        event_run_label = self._get_program_run_label(program)
+        if event_run_label is None:
+            raw_run_label = event.get("run_label")
+            if isinstance(raw_run_label, str) and raw_run_label:
+                event_run_label = raw_run_label
+
+        if event_run_label is None:
+            return True
+        return event_run_label == current_run_label
+
+    def _filter_programs_for_active_run(self, programs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Keep only programs that belong to the active run label."""
+        current_run_label = self._get_run_label()
+        if not current_run_label:
+            return [program for program in programs if isinstance(program, dict)]
+
+        filtered: List[Dict[str, Any]] = []
+        dropped = 0
+        for program in programs:
+            if not isinstance(program, dict):
+                continue
+            program_run_label = self._get_program_run_label(program)
+            if program_run_label and program_run_label != current_run_label:
+                dropped += 1
+                continue
+            filtered.append(program)
+
+        if dropped:
+            logger.warning(
+                "Dropped %s stale program(s) while rebuilding monitor state for run '%s'.",
+                dropped,
+                current_run_label,
+            )
+        return filtered
 
     async def _broadcast(self, message: str) -> None:
         if not self._clients:
@@ -606,7 +1359,17 @@ class MonitorServer:
         while not self._stop_event.is_set():
             await asyncio.sleep(5)
             if self._clients:
-                await self._broadcast(json.dumps({"type": "heartbeat", "timestamp": time.time()}))
+                await self._broadcast(
+                    json.dumps(
+                        {
+                            "type": "heartbeat",
+                            "timestamp": time.time(),
+                            "run_state": self._get_run_state(),
+                            "last_event_at": self._last_event_at,
+                            "control_capabilities": self._get_control_capabilities(),
+                        }
+                    )
+                )
 
     async def _generate_program_summary(self, writer: asyncio.StreamWriter, pid: str) -> None:
         """Generate a crisp LLM summary of what changed in a single program."""

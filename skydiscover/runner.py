@@ -1,13 +1,15 @@
+import asyncio
 import json
 import logging
 import os
 import signal
 import sys
+import threading
 import time
 import uuid
-from typing import Optional
+from typing import Any, Dict, Optional, Tuple
 
-from skydiscover.config import Config, build_output_dir, load_config
+from skydiscover.config import Config, build_output_dir, load_config, resolve_iteration_budget
 from skydiscover.search.base_database import Program
 from skydiscover.search.default_discovery_controller import (
     DiscoveryController,
@@ -77,6 +79,9 @@ class Runner:
 
         # Initialize the discovery controller
         self.discovery_controller: Optional[DiscoveryController] = None
+        self._monitor_pause_requested = False
+        self._signal_shutdown_requested = False
+        self._resume_requested = threading.Event()
 
         logger.info(f"Runner ready: search={self.name}, program={self.initial_program_path}")
 
@@ -106,20 +111,28 @@ class Runner:
         self,
         iterations: Optional[int] = None,
         checkpoint_path: Optional[str] = None,
+        run_forever: bool = False,
     ) -> Optional[Program]:
         """Entrypoint for the discovery process.
 
         Args:
             iterations: max iterations (uses config.max_iterations if None).
             checkpoint_path: resume from this checkpoint directory if provided.
+            run_forever: run indefinitely until interrupted or early stopping triggers.
 
         Returns:
             Best Program found, or None if no valid programs were produced.
         """
-        max_iterations = iterations if iterations is not None else self.config.max_iterations
+        max_iterations = resolve_iteration_budget(
+            self.config,
+            iterations=iterations,
+            run_forever=run_forever,
+        )
 
         start_iteration = 0
-        if checkpoint_path and os.path.exists(checkpoint_path):
+        if checkpoint_path:
+            if not os.path.exists(checkpoint_path):
+                raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
             self._load_checkpoint(checkpoint_path)
             start_iteration = self.database.last_iteration + 1
             logger.info(f"Resuming from iteration {start_iteration}")
@@ -152,66 +165,205 @@ class Runner:
                 f"Resuming from iteration {start_iteration} with {len(self.database.programs)} programs"
             )
 
+        discovery_start = start_iteration + 1 if should_add_initial else start_iteration
+        remaining_iterations = self._compute_remaining_iteration_budget(
+            max_iterations,
+            discovery_start,
+        )
+
         # Start the monitor
         monitor_server = None
+        early_stopped = False
+        latest_checkpoint: Optional[str] = checkpoint_path
+        final_status = "failed"
         try:
             monitor_server = self._start_monitor(max_iterations)
             self._setup_human_feedback(monitor_server)
             self._setup_monitor_summary(monitor_server)
             self._push_existing_to_monitor()
             self._install_signal_handlers()
-
-            discovery_start = start_iteration + 1 if should_add_initial else start_iteration
             self.database.log_status()
 
-            def checkpoint_cb(iteration: int) -> None:
-                self._sync_database()
-                self._save_checkpoint(iteration)
+            if remaining_iterations == 0:
+                logger.info("Iteration budget already exhausted; skipping discovery loop")
+                final_status = "completed"
+            else:
+                while True:
+                    cycle_start = discovery_start
+                    cycle_budget = remaining_iterations
+                    completed_iterations_seen = set()
 
-            # MAIN LOOP: Run the discovery
-            await self.discovery_controller.run_discovery(
-                discovery_start,
-                max_iterations,
-                checkpoint_callback=checkpoint_cb,
+                    if self.discovery_controller is not None:
+                        self.discovery_controller.shutdown_event.clear()
+                    self._monitor_pause_requested = False
+                    self._resume_requested.clear()
+
+                    self._write_run_state(
+                        "running",
+                        max_iterations=max_iterations,
+                        checkpoint_path=latest_checkpoint,
+                        remaining_iterations=cycle_budget,
+                    )
+                    self._emit_monitor_state(monitor_server)
+
+                    def progress_cb(iteration: int) -> None:
+                        if iteration not in completed_iterations_seen:
+                            completed_iterations_seen.add(iteration)
+                        self._write_run_state(
+                            "running",
+                            max_iterations=max_iterations,
+                            checkpoint_path=latest_checkpoint,
+                            remaining_iterations=self._decrement_iteration_budget(
+                                cycle_budget,
+                                len(completed_iterations_seen),
+                            ),
+                        )
+                        self._emit_monitor_state(monitor_server)
+
+                    if self.discovery_controller is not None:
+                        self.discovery_controller.progress_callback = progress_cb
+
+                    def checkpoint_cb(iteration: int) -> None:
+                        nonlocal latest_checkpoint
+                        self._sync_database()
+                        saved_path = self._save_checkpoint(iteration)
+                        latest_checkpoint = saved_path
+                        executed = len(completed_iterations_seen) + (
+                            0 if iteration in completed_iterations_seen else 1
+                        )
+                        self._write_run_state(
+                            "running",
+                            max_iterations=max_iterations,
+                            checkpoint_path=saved_path,
+                            remaining_iterations=self._decrement_iteration_budget(
+                                cycle_budget,
+                                executed,
+                            ),
+                        )
+                        self._emit_monitor_state(monitor_server)
+
+                    if cycle_budget == 0:
+                        logger.info("No remaining iteration budget for this run cycle")
+                        final_status = "completed"
+                        break
+
+                    try:
+                        await self.discovery_controller.run_discovery(
+                            cycle_start,
+                            cycle_budget,
+                            checkpoint_callback=checkpoint_cb,
+                        )
+                    finally:
+                        if self.discovery_controller is not None:
+                            self.discovery_controller.progress_callback = None
+
+                    self._sync_database()
+                    if self.database.programs:
+                        latest_checkpoint = self._save_checkpoint(self.database.last_iteration)
+
+                    early_stopped = self.discovery_controller.early_stopping_triggered
+                    shutdown_requested = self.discovery_controller.shutdown_event.is_set()
+                    executed_iterations = self._count_executed_iterations(
+                        cycle_start,
+                        self.database.last_iteration,
+                    )
+                    remaining_iterations = self._decrement_iteration_budget(
+                        cycle_budget,
+                        executed_iterations,
+                    )
+                    budget_exhausted = (
+                        remaining_iterations is not None and remaining_iterations == 0
+                    )
+
+                    if early_stopped:
+                        final_status = "early_stopping"
+                        break
+
+                    if budget_exhausted:
+                        final_status = "completed"
+                        break
+
+                    if shutdown_requested:
+                        final_status = "paused"
+                        self._write_run_state(
+                            "paused",
+                            max_iterations=max_iterations,
+                            checkpoint_path=latest_checkpoint,
+                            remaining_iterations=remaining_iterations,
+                        )
+                        self._emit_monitor_state(monitor_server)
+
+                        if self._should_wait_for_monitor_resume(monitor_server):
+                            logger.info(
+                                "Discovery paused from monitor; waiting for a resume request..."
+                            )
+                            resumed = await self._wait_for_resume_request()
+                            if resumed:
+                                discovery_start = self.database.last_iteration + 1
+                                logger.info(
+                                    "Resume requested from monitor; continuing at iteration %s",
+                                    discovery_start,
+                                )
+                                continue
+
+                        break
+
+                    final_status = "completed"
+                    break
+
+            if final_status in {"completed", "early_stopping"}:
+                best = self._get_best_program()
+                if best:
+                    try:
+                        test_result = await self.discovery_controller.evaluator.evaluate_program(
+                            best.solution, best.id, mode="test"
+                        )
+                        for k, v in test_result.metrics.items():
+                            best.metrics[f"test_{k}"] = v
+                        logger.info(
+                            f"Test evaluation for best program: {format_metrics(test_result.metrics)}"
+                        )
+                        self._save_best_program(best)
+                    except Exception as e:
+                        logger.warning(f"Test-mode re-evaluation failed: {e}")
+
+            self._write_run_state(
+                final_status,
+                max_iterations=max_iterations,
+                checkpoint_path=latest_checkpoint,
+                remaining_iterations=remaining_iterations,
             )
-
+            self._emit_monitor_state(monitor_server)
+        except Exception as exc:
             self._sync_database()
-            final_iteration = discovery_start + max_iterations - 1
-            if final_iteration > 0:
-                self._save_checkpoint(final_iteration)
-
-            # Re-evaluate best program in test mode (authoritative score).
-            best = self._get_best_program()
-            if best:
-                try:
-                    test_result = await self.discovery_controller.evaluator.evaluate_program(
-                        best.solution, best.id, mode="test"
-                    )
-                    for k, v in test_result.metrics.items():
-                        best.metrics[f"test_{k}"] = v
-                    logger.info(
-                        f"Test evaluation for best program: {format_metrics(test_result.metrics)}"
-                    )
-                    # Persist test metrics to disk so they survive the run.
-                    self._save_best_program(best)
-                except Exception as e:
-                    logger.warning(f"Test-mode re-evaluation failed: {e}")
+            if self.database.programs:
+                latest_checkpoint = self._save_checkpoint(self.database.last_iteration)
+            self._write_run_state(
+                "failed",
+                max_iterations=max_iterations,
+                checkpoint_path=latest_checkpoint,
+                remaining_iterations=remaining_iterations,
+                error=str(exc),
+            )
+            self._emit_monitor_state(monitor_server)
+            raise
 
         finally:
             # Stop the monitor
             early_stopped = (
                 self.discovery_controller is not None
                 and self.discovery_controller.early_stopping_triggered
-            )
+            ) or early_stopped
             if self.discovery_controller is not None:
                 self.discovery_controller.close()
             self.discovery_controller = None
 
             if monitor_server:
                 try:
-                    reason = "early_stopping" if early_stopped else "completed"
-                    monitor_server.push_event({"type": "discovery_complete", "reason": reason})
-                    time.sleep(0.5)
+                    reason = "early_stopping" if early_stopped else final_status
+                    if final_status != "paused":
+                        monitor_server.push_event({"type": "discovery_complete", "reason": reason})
+                        time.sleep(0.5)
                     monitor_server.stop()
                 except Exception:
                     logger.debug("Failed to stop monitor server", exc_info=True)
@@ -219,7 +371,7 @@ class Runner:
         # Get the best program
         best_program = self._get_best_program()
         if best_program:
-            status = "early stopping" if early_stopped else "completed"
+            status = "early stopping" if early_stopped else final_status.replace("_", " ")
             logger.info(f"Discovery {status}. Best: {format_metrics(best_program.metrics)}")
             self._save_best_program(best_program)
             return best_program
@@ -285,7 +437,7 @@ class Runner:
     # Monitor and feedback setup
     # ------------------------------------------------------------------
 
-    def _start_monitor(self, max_iterations: int):
+    def _start_monitor(self, max_iterations: Optional[int]):
         if not self.config.monitor.enabled:
             return None
         try:
@@ -295,8 +447,13 @@ class Runner:
                 host=self.config.monitor.host,
                 port=self.config.monitor.port,
                 max_solution_length=self.config.monitor.max_solution_length,
+                output_dir=self.output_dir,
             )
-            server.set_config_summary(f"{self.name} | max_iter={max_iterations}")
+            server.set_stop_handler(self._request_pause_from_monitor)
+            server.set_resume_handler(self._request_resume_from_monitor)
+            server.set_solution_provider(self._resolve_monitor_solution)
+            budget_label = "unbounded" if max_iterations is None else str(max_iterations)
+            server.set_config_summary(f"{self.name} | max_iter={budget_label}")
             server.start()
 
             callback = create_monitor_callback(server, self.database, time.time())
@@ -309,6 +466,21 @@ class Runner:
         except Exception as e:
             logger.warning(f"Failed to start monitor: {e}")
             return None
+
+    def _resolve_monitor_solution(self, program_id: str) -> Tuple[str, str]:
+        program = self.database.get(program_id)
+        if program is None:
+            return "", ""
+
+        solution = getattr(program, "solution", "") or ""
+        parent_solution = ""
+        parent_id = getattr(program, "parent_id", None)
+        if parent_id:
+            parent_program = self.database.get(parent_id)
+            if parent_program is not None:
+                parent_solution = getattr(parent_program, "solution", "") or ""
+
+        return solution, parent_solution
 
     def _setup_human_feedback(self, monitor_server) -> None:
         if not (self.config.human_feedback_enabled or monitor_server):
@@ -345,11 +517,15 @@ class Runner:
     def _push_existing_to_monitor(self) -> None:
         if not (self.discovery_controller.monitor_callback and self.database.programs):
             return
+        emit_once = getattr(self.discovery_controller, "_emit_program_to_monitor", None)
         for prog in self.database.programs.values():
             try:
-                self.discovery_controller.monitor_callback(
-                    prog, getattr(prog, "iteration_found", 0)
-                )
+                if callable(emit_once):
+                    emit_once(prog, getattr(prog, "iteration_found", 0))
+                else:
+                    self.discovery_controller.monitor_callback(
+                        prog, getattr(prog, "iteration_found", 0)
+                    )
             except Exception:
                 logger.debug("Monitor callback failed for program %s", prog.id, exc_info=True)
         logger.info(f"Pushed {len(self.database.programs)} existing program(s) to monitor")
@@ -357,6 +533,8 @@ class Runner:
     def _install_signal_handlers(self) -> None:
         def on_signal(signum, frame):
             logger.info(f"Signal {signum} received, shutting down...")
+            self._signal_shutdown_requested = True
+            self._resume_requested.set()
             if self.discovery_controller is not None:
                 self.discovery_controller.request_shutdown()
 
@@ -381,6 +559,76 @@ class Runner:
         if db is not None and db is not self.database:
             self.database = db
 
+    def _request_pause_from_monitor(self) -> None:
+        """Request a graceful pause from the live monitor."""
+        self._monitor_pause_requested = True
+        if self.discovery_controller is not None:
+            self.discovery_controller.request_shutdown()
+
+    def _request_resume_from_monitor(self) -> None:
+        """Resume a paused monitor-controlled run."""
+        self._resume_requested.set()
+
+    def _should_wait_for_monitor_resume(self, monitor_server) -> bool:
+        """Return True when a monitor-triggered pause should stay interactive."""
+        return (
+            monitor_server is not None
+            and self._monitor_pause_requested
+            and not self._signal_shutdown_requested
+        )
+
+    async def _wait_for_resume_request(self) -> bool:
+        """Wait until the monitor asks to resume or a signal asks us to exit."""
+        while not self._resume_requested.is_set():
+            await asyncio.sleep(0.1)
+
+        should_resume = not self._signal_shutdown_requested
+        self._resume_requested.clear()
+        self._monitor_pause_requested = False
+        if self.discovery_controller is not None:
+            self.discovery_controller.shutdown_event.clear()
+        return should_resume
+
+    def _compute_remaining_iteration_budget(
+        self,
+        max_iterations: Optional[int],
+        discovery_start: int,
+    ) -> Optional[int]:
+        """Return the remaining bounded budget from a given discovery start point."""
+        if max_iterations is None:
+            return None
+
+        has_initial_program = bool(self.initial_program_solution) or bool(
+            getattr(self.database, "initial_program_id", None)
+        )
+        completed_iterations = max(0, discovery_start - (1 if has_initial_program else 0))
+        return max(0, max_iterations - completed_iterations)
+
+    def _count_executed_iterations(self, cycle_start: int, last_iteration: int) -> int:
+        """Count completed iterations within the current cycle."""
+        if last_iteration < cycle_start:
+            return 0
+        return last_iteration - cycle_start + 1
+
+    def _decrement_iteration_budget(
+        self,
+        remaining_iterations: Optional[int],
+        executed_iterations: int,
+    ) -> Optional[int]:
+        """Decrease a bounded iteration budget by executed work."""
+        if remaining_iterations is None:
+            return None
+        return max(0, remaining_iterations - max(0, executed_iterations))
+
+    def _emit_monitor_state(self, monitor_server) -> None:
+        """Prompt the monitor UI to refresh run-state immediately."""
+        if monitor_server is None:
+            return
+        try:
+            monitor_server.push_event({"type": "run_state_update"})
+        except Exception:
+            logger.debug("Failed to emit run_state_update", exc_info=True)
+
     def _setup_logging(self) -> None:
         log_dir = self.config.log_dir or os.path.join(self.output_dir, "logs")
         setup_search_logging(log_level=self.config.log_level, log_dir=log_dir, name=self.name)
@@ -389,7 +637,7 @@ class Runner:
         with open(self.initial_program_path, "r") as f:
             return f.read()
 
-    def _save_checkpoint(self, iteration: int) -> None:
+    def _save_checkpoint(self, iteration: int) -> str:
         checkpoint_dir = os.path.join(self.output_dir, "checkpoints")
         checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{iteration}")
         os.makedirs(checkpoint_path, exist_ok=True)
@@ -423,6 +671,7 @@ class Runner:
             logger.info(f"Checkpoint {iteration}: best={format_metrics(best.metrics)}")
 
         logger.info(f"Checkpoint saved to {checkpoint_path}")
+        return checkpoint_path
 
     def _load_checkpoint(self, checkpoint_path: str) -> None:
         if not os.path.exists(checkpoint_path):
@@ -473,3 +722,36 @@ class Runner:
                 shutil.copy2(img, os.path.join(best_dir, "best_image" + os.path.splitext(img)[1]))
 
         logger.info(f"Best program saved to {best_dir}")
+
+    def _write_run_state(
+        self,
+        status: str,
+        *,
+        max_iterations: Optional[int],
+        checkpoint_path: Optional[str] = None,
+        remaining_iterations: Optional[int] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """Persist lightweight run metadata for future monitoring/resume UIs."""
+        best = self._get_best_program()
+        payload: Dict[str, Any] = {
+            "status": status,
+            "search_type": self.name,
+            "max_iterations": max_iterations,
+            "last_iteration": self.database.last_iteration,
+            "num_programs": len(self.database.programs),
+            "updated_at": time.time(),
+        }
+        if remaining_iterations is not None:
+            payload["remaining_iterations"] = remaining_iterations
+        if checkpoint_path:
+            payload["checkpoint_path"] = checkpoint_path
+        if best:
+            payload["best_program_id"] = best.id
+            payload["best_score"] = get_score(best.metrics or {})
+        if error:
+            payload["error"] = error
+
+        state_path = os.path.join(self.output_dir, "run_state.json")
+        with open(state_path, "w") as f:
+            json.dump(payload, f, indent=2)

@@ -98,6 +98,7 @@ class AdaEvolveController(DiscoveryController):
         self._iteration_stats_file = None
         self._last_sampling_mode: Optional[str] = None
         self._last_sampling_intensity: Optional[float] = None
+        self._monitor_emitted_program_ids: set[str] = set()
 
         logger.info(
             f"AdaEvolveController initialized "
@@ -110,6 +111,57 @@ class AdaEvolveController(DiscoveryController):
         from skydiscover.search.utils.discovery_utils import load_evaluator_code
 
         return load_evaluator_code(self.evaluation_file)
+
+    def _emit_program_to_monitor(
+        self,
+        program: Program,
+        iteration: Optional[int] = None,
+    ) -> None:
+        """Send a program to the live monitor exactly once."""
+        if self.monitor_callback is None or program.id in self._monitor_emitted_program_ids:
+            return
+
+        effective_iteration = (
+            iteration
+            if iteration is not None
+            else getattr(program, "iteration_found", None)
+        )
+        if effective_iteration is None:
+            effective_iteration = 0
+
+        try:
+            self.monitor_callback(program, effective_iteration)
+        except Exception:
+            logger.debug("Monitor callback error", exc_info=True)
+            return
+
+        self._monitor_emitted_program_ids.add(program.id)
+
+    def _emit_missing_monitor_programs(self, default_iteration: int = 0) -> None:
+        """Backfill any database programs that have not reached the monitor yet."""
+        unseen_programs = [
+            program
+            for program in self.database.programs.values()
+            if program.id not in self._monitor_emitted_program_ids
+        ]
+        if not unseen_programs:
+            return
+
+        unseen_programs.sort(
+            key=lambda program: (
+                getattr(program, "iteration_found", default_iteration)
+                if getattr(program, "iteration_found", None) is not None
+                else default_iteration,
+                program.id,
+            )
+        )
+
+        for program in unseen_programs:
+            program_iteration = getattr(program, "iteration_found", None)
+            self._emit_program_to_monitor(
+                program,
+                default_iteration if program_iteration is None else program_iteration,
+            )
 
     # =========================================================================
     # JSON Logging for AdaEvolve Stats
@@ -226,23 +278,30 @@ class AdaEvolveController(DiscoveryController):
     async def run_discovery(
         self,
         start_iteration: int,
-        max_iterations: int,
+        max_iterations: Optional[int],
         checkpoint_callback=None,
     ) -> Optional[Program]:
         """Run evolution with adaptive search intensity and island rotation."""
-        total = start_iteration + max_iterations
-        logger.info(
-            f"AdaEvolve: Running {max_iterations} iterations "
-            f"across {self.database.num_islands} islands"
-        )
+        total = start_iteration + max_iterations if max_iterations is not None else None
+        if max_iterations is None:
+            logger.info(
+                f"AdaEvolve: Running unbounded across {self.database.num_islands} islands"
+            )
+        else:
+            logger.info(
+                f"AdaEvolve: Running {max_iterations} iterations "
+                f"across {self.database.num_islands} islands"
+            )
 
         # Set up comprehensive JSON logging for iteration stats
         self._setup_iteration_stats_logging()
 
         # Ensure all islands are seeded
         self._ensure_all_islands_seeded()
+        self._emit_missing_monitor_programs(default_iteration=start_iteration)
 
-        for iteration in range(start_iteration, total):
+        iteration = start_iteration
+        while total is None or iteration < total:
             if self.shutdown_event.is_set():
                 logger.info("Shutdown requested")
                 break
@@ -255,6 +314,13 @@ class AdaEvolveController(DiscoveryController):
                 # CRITICAL: Tell database iteration is complete
                 # This handles island rotation (UCB) and migration
                 self.database.end_iteration(iteration)
+                self._emit_missing_monitor_programs(default_iteration=iteration)
+                if self.progress_callback is not None:
+                    try:
+                        self.progress_callback(iteration)
+                    except Exception:
+                        logger.debug("Progress callback error", exc_info=True)
+                iteration += 1
 
         logger.info("AdaEvolve completed")
         self.database.log_status()
@@ -295,6 +361,7 @@ class AdaEvolveController(DiscoveryController):
                     metadata={"seeded_to_island": i},
                 )
                 self.database.add(copy, iteration=0, target_island=i)
+                self._emit_program_to_monitor(copy, copy.iteration_found)
                 logger.info(f"Seeded island {i}")
 
     async def _run_iteration(self, iteration: int, checkpoint_callback) -> None:
@@ -406,11 +473,7 @@ class AdaEvolveController(DiscoveryController):
         self.database.add(child, iteration=iteration, parent_id=result.parent_id)
 
         # Fire monitor callback (live dashboard)
-        if self.monitor_callback:
-            try:
-                self.monitor_callback(child, iteration)
-            except Exception:
-                logger.debug("Monitor callback error", exc_info=True)
+        self._emit_program_to_monitor(child, iteration)
 
         # Log prompt
         if result.prompt:

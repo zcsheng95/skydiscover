@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from skydiscover.config import Config, apply_overrides, load_config
+from skydiscover.config import Config, apply_overrides, load_config, resolve_iteration_budget
 from skydiscover.runner import Runner
 from skydiscover.search.base_database import Program
 from skydiscover.utils.metrics import get_score
@@ -59,12 +59,14 @@ def run_discovery(
     initial_program: Optional[Union[str, Path, List[str]]] = None,
     model: Optional[str] = None,
     iterations: Optional[int] = None,
+    run_forever: bool = False,
     search: Optional[str] = None,
     config: Union[str, Path, Config, None] = None,
     agentic: bool = False,
     output_dir: Optional[str] = None,
     system_prompt: Optional[str] = None,
     api_base: Optional[str] = None,
+    checkpoint_path: Optional[Union[str, Path]] = None,
     cleanup: bool = True,
 ) -> DiscoveryResult:
     """Run a discovery process and return the best result.
@@ -75,12 +77,14 @@ def run_discovery(
             Optional — when omitted the LLM generates a solution from scratch.
         model: Model name(s), comma-separated. e.g. "gpt-5" or "gpt-5,gemini/gemini-3-pro".
         iterations: Max iterations (overrides config).
+        run_forever: Run indefinitely until interrupted or early stopping triggers.
         search: Algorithm name ("topk", "adaevolve", "evox", "openevolve_native", etc.).
         config: YAML path, Config object, or None for defaults.
         agentic: Enable agentic mode (codebase root derived from initial_program).
         output_dir: Where to write results (temp dir if None).
         system_prompt: Domain-specific context for the LLM.
         api_base: Base URL for an OpenAI-compatible API.
+        checkpoint_path: Optional checkpoint directory to resume from.
         cleanup: Remove temp files after the run.
 
     Returns:
@@ -92,6 +96,7 @@ def run_discovery(
             evaluator,
             config,
             iterations=iterations,
+            run_forever=run_forever,
             output_dir=output_dir,
             cleanup=cleanup,
             agentic=agentic,
@@ -99,6 +104,7 @@ def run_discovery(
             search=search,
             system_prompt=system_prompt,
             api_base=api_base,
+            checkpoint_path=checkpoint_path,
         )
     )
 
@@ -110,11 +116,13 @@ async def _run_discovery_async(
     *,
     model: Optional[str] = None,
     iterations: Optional[int] = None,
+    run_forever: bool = False,
     search: Optional[str] = None,
     agentic: bool = False,
     output_dir: Optional[str] = None,
     system_prompt: Optional[str] = None,
     api_base: Optional[str] = None,
+    checkpoint_path: Optional[Union[str, Path]] = None,
     cleanup: bool = True,
 ) -> DiscoveryResult:
     """Async implementation of run_discovery."""
@@ -135,6 +143,11 @@ async def _run_discovery_async(
             agentic=agentic,
             search=search,
             system_prompt=system_prompt,
+        )
+        iteration_budget = resolve_iteration_budget(
+            config_obj,
+            iterations=iterations,
+            run_forever=run_forever,
         )
 
         # Prepare the program (optional — None means "from scratch")
@@ -169,6 +182,12 @@ async def _run_discovery_async(
         if search_type:
             from skydiscover.extras.external import KNOWN_EXTERNAL, get_runner, is_external
 
+            if search_type in KNOWN_EXTERNAL and iteration_budget is None:
+                raise ValueError(
+                    f"Search type '{search_type}' does not support unbounded runs yet. "
+                    "Use a native SkyDiscover search backend for run_forever/max_iterations=null."
+                )
+
             if is_external(search_type):
                 from skydiscover.extras.monitor import start_monitor, stop_monitor
 
@@ -180,7 +199,7 @@ async def _run_discovery_async(
                         program_path=program_path,
                         evaluator_path=evaluator_path,
                         config_obj=config_obj,
-                        iterations=iterations or config_obj.max_iterations,
+                        iterations=iteration_budget,
                         output_dir=actual_output_dir,
                         monitor_callback=monitor_callback,
                         feedback_reader=feedback_reader,
@@ -222,7 +241,11 @@ async def _run_discovery_async(
             output_dir=actual_output_dir,
         )
 
-        best_program = await controller.run(iterations=iterations)
+        best_program = await controller.run(
+            iterations=iterations,
+            checkpoint_path=str(checkpoint_path) if checkpoint_path is not None else None,
+            run_forever=run_forever,
+        )
 
         best_score = 0.0
         best_solution = ""
@@ -253,7 +276,8 @@ async def _run_discovery_async(
 def discover_solution(
     evaluator: Callable[[str], Dict[str, Any]],
     initial_solution: Optional[str] = None,
-    iterations: int = 100,
+    iterations: Optional[int] = None,
+    run_forever: bool = False,
     search: Optional[str] = None,
     model: Optional[str] = None,
     **kwargs: Any,
@@ -266,6 +290,7 @@ def discover_solution(
         evaluator=evaluator,
         initial_program=initial_solution,
         iterations=iterations,
+        run_forever=run_forever,
         search=search,
         model=model,
         **kwargs,

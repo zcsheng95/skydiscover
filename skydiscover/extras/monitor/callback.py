@@ -14,6 +14,7 @@ from skydiscover.extras.monitor.server import MonitorServer
 logger = logging.getLogger(__name__)
 
 SOLUTION_SNIPPET_LENGTH = 500
+DISPLAY_TEXT_LENGTH = 4000
 
 
 def create_monitor_callback(
@@ -32,6 +33,60 @@ def create_monitor_callback(
             logger.debug("Monitor callback error", exc_info=True)
 
     return _callback
+
+
+def _persist_trace_record(
+    server: MonitorServer,
+    *,
+    program_payload: Dict[str, Any],
+    full_solution: str,
+) -> None:
+    trace_store = getattr(server, "_trace_store", None)
+    if trace_store is None:
+        return
+
+    run_label_getter = getattr(server, "_get_run_label", None)
+    series_label_getter = getattr(server, "_get_series_label", None)
+    run_label = run_label_getter() if callable(run_label_getter) else ""
+    series_label = series_label_getter() if callable(series_label_getter) else ""
+
+    record = {
+        "program_id": program_payload.get("id"),
+        "iteration": program_payload.get("iteration"),
+        "run_label": run_label,
+        "series_label": series_label,
+        "score": program_payload.get("score"),
+        "metrics": program_payload.get("metrics", {}),
+        "parent_id": program_payload.get("parent_id"),
+        "parent_score": program_payload.get("parent_score"),
+        "parent_iter": program_payload.get("parent_iter"),
+        "context_ids": program_payload.get("context_ids", []),
+        "context_scores": program_payload.get("context_scores", []),
+        "generation": program_payload.get("generation", 0),
+        "label_type": program_payload.get("label_type"),
+        "solution_snippet": program_payload.get("solution_snippet", ""),
+        "island": program_payload.get("island"),
+        "is_best": program_payload.get("is_best", False),
+        "image_path": program_payload.get("image_path"),
+        "display_text": program_payload.get("display_text"),
+        "error_text": program_payload.get("error_text"),
+        "timestamp": time.time(),
+    }
+
+    for key in (
+        "branch_id",
+        "branch_source_program_id",
+        "branch_local_iteration",
+        "branch_run_label",
+        "branch_source_run_label",
+        "branch_source_series_label",
+        "branch_anchor_iteration",
+        "branch_display_name",
+    ):
+        if key in program_payload:
+            record[key] = program_payload[key]
+
+    trace_store.append_candidate_record(record, solution_text=full_solution)
 
 
 def _push_program_event(
@@ -94,6 +149,8 @@ def _push_program_event(
 
     # Image path from metadata (image evolution mode)
     image_path = (getattr(program, "metadata", {}) or {}).get("image_path")
+    error_text = _extract_error_text(metrics)
+    display_text = _extract_display_text(program)
 
     total_programs = len(database.programs) if hasattr(database, "programs") else 0
     best_prog = database.get_best_program() if hasattr(database, "get_best_program") else None
@@ -125,6 +182,8 @@ def _push_program_event(
         "is_best": is_best,
         "generation": getattr(program, "generation", 0),
         "image_path": image_path,
+        "error_text": error_text,
+        "display_text": display_text,
     }
 
     stats = {
@@ -148,6 +207,14 @@ def _push_program_event(
     }
 
     server.push_event(event)
+    try:
+        _persist_trace_record(
+            server,
+            program_payload=prog_data,
+            full_solution=code,
+        )
+    except Exception:
+        logger.warning("Failed to persist candidate trace for %s", program.id, exc_info=True)
 
 
 def create_external_callback(
@@ -202,6 +269,8 @@ def create_external_callback(
                 "is_best": is_best,
                 "generation": getattr(program, "generation", 0),
                 "image_path": (getattr(program, "metadata", {}) or {}).get("image_path"),
+                "error_text": _extract_error_text(program.metrics or {}),
+                "display_text": _extract_display_text(program),
             }
             stats = {
                 "total_programs": len(programs),
@@ -222,6 +291,18 @@ def create_external_callback(
                 ),
             }
             server.push_event(event)
+            try:
+                _persist_trace_record(
+                    server,
+                    program_payload=prog_data,
+                    full_solution=code,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to persist external candidate trace for %s",
+                    program.id,
+                    exc_info=True,
+                )
         except Exception:
             logger.debug("External monitor callback error", exc_info=True)
 
@@ -237,3 +318,45 @@ def _safe_metrics(metrics: Dict[str, Any]) -> Dict[str, Any]:
         else:
             safe[k] = str(v)
     return safe
+
+
+def _extract_error_text(metrics: Dict[str, Any]) -> Optional[str]:
+    """Extract a human-readable error string from metrics when present."""
+    for key in ("error", "error_message"):
+        value = metrics.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _extract_display_text(program: Any) -> Optional[str]:
+    """Pick the most useful narrative text for inspector display."""
+    metrics = getattr(program, "metrics", {}) or {}
+    metadata = getattr(program, "metadata", {}) or {}
+    artifacts = getattr(program, "artifacts", {}) or {}
+
+    candidate_values = [
+        metadata.get("display_text"),
+        metadata.get("insight"),
+        metadata.get("summary"),
+        metadata.get("description"),
+        metrics.get("insight_text"),
+        metrics.get("insight"),
+        metrics.get("judge_conclusion"),
+        metrics.get("judge_evidence"),
+        metrics.get("summary"),
+        artifacts.get("insight_text"),
+        artifacts.get("insight"),
+        artifacts.get("judge_conclusion"),
+        artifacts.get("judge_evidence"),
+        artifacts.get("summary"),
+        artifacts.get("analysis"),
+        artifacts.get("feedback"),
+    ]
+
+    for value in candidate_values:
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text[:DISPLAY_TEXT_LENGTH]
+    return None

@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import traceback
+from pathlib import Path
 from typing import Dict, Union
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,14 @@ Return a JSON object with exactly this structure:
 """
 
 _client = None
+
+
+def _resolve_dataset_path() -> str:
+    """Return the VIS dataset path visible to evaluated candidate programs."""
+    return os.environ.get(
+        "VIS_DATASET_PATH",
+        str(Path(__file__).resolve().parent / "data" / "VIS.csv"),
+    )
 
 
 def _get_client():
@@ -204,11 +213,15 @@ def _run_program(program_path: str, timeout_seconds: int = 120) -> Dict:
     with os.fdopen(script_fd, "w") as f:
         f.write(script)
 
+    child_env = os.environ.copy()
+    child_env["VIS_DATASET_PATH"] = _resolve_dataset_path()
+
     try:
         proc = subprocess.Popen(
             [sys.executable, script_path],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=child_env,
         )
         try:
             stdout, stderr = proc.communicate(timeout=timeout_seconds)

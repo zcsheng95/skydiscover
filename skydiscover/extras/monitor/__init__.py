@@ -41,6 +41,7 @@ def start_monitor(
             host=config.monitor.host,
             port=config.monitor.port,
             max_solution_length=config.monitor.max_solution_length,
+            output_dir=output_dir,
         )
         monitor_server.start()
         monitor_callback = create_external_callback(monitor_server, time.time())

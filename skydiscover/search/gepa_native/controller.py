@@ -88,7 +88,7 @@ class GEPANativeController(DiscoveryController):
     async def run_discovery(
         self,
         start_iteration: int,
-        max_iterations: int,
+        max_iterations: Optional[int],
         checkpoint_callback: Optional[Callable[[int], None]] = None,
         post_process_result: Optional[bool] = True,
         retry_times: Optional[int] = 3,
@@ -102,7 +102,9 @@ class GEPANativeController(DiscoveryController):
         4. If accepted: process result, schedule next proactive merge.
         5. Track improvement; trigger stagnation merge if stuck.
         """
-        total_iterations = start_iteration + max_iterations
+        total_iterations = (
+            start_iteration + max_iterations if max_iterations is not None else None
+        )
 
         # Initialise best-score from database if resuming
         best = self.database.get_best_program()
@@ -110,7 +112,8 @@ class GEPANativeController(DiscoveryController):
             self._best_score_seen = get_score(best.metrics)
 
         result = None
-        for iteration in range(start_iteration, total_iterations):
+        iteration = start_iteration
+        while total_iterations is None or iteration < total_iterations:
             if self.shutdown_event.is_set():
                 logger.info("Shutdown requested, stopping discovery loop early")
                 break
@@ -165,6 +168,13 @@ class GEPANativeController(DiscoveryController):
             except Exception as e:
                 logger.exception(f"Error in iteration {iteration}: {e}")
                 self._iterations_without_improvement += 1
+            finally:
+                if self.progress_callback is not None:
+                    try:
+                        self.progress_callback(iteration)
+                    except Exception:
+                        logger.debug("Progress callback error", exc_info=True)
+                iteration += 1
 
         if not post_process_result:
             return result

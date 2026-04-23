@@ -40,7 +40,7 @@ def _map_config(config: Config, iterations: Optional[int], output_dir: str):
     apply_defaults(oe, load_defaults("openevolve_default.yaml"))
 
     # CLI overrides
-    oe.max_iterations = iterations or config.max_iterations
+    oe.max_iterations = iterations if iterations is not None else config.max_iterations
 
     # LLM models (from --model / -c config)
     if config.llm.models:

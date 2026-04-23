@@ -40,6 +40,7 @@ class CoEvolutionController(DiscoveryController):
 
     # Adaptive mode defaults
     DEFAULT_SWITCH_RATIO = 0.10  # Evolve search after 10% of total iterations stagnate
+    DEFAULT_UNBOUNDED_SWITCH_INTERVAL = 10
     DEFAULT_IMPROVEMENT_THRESHOLD = 0.01
 
     def __init__(self, controller_input: DiscoveryControllerInput):
@@ -98,17 +99,28 @@ class CoEvolutionController(DiscoveryController):
     async def run_discovery(
         self,
         start_iteration: int,
-        max_iterations: int,
+        max_iterations: Optional[int],
         checkpoint_callback=None,
         post_process_result: Optional[bool] = True,
     ):
         """Run co-evolution of solution programs and search algorithms."""
-        self.total_solution_iterations = start_iteration + max_iterations
+        self.total_solution_iterations = (
+            start_iteration + max_iterations if max_iterations is not None else None
+        )
         self._max_solution_iterations = max_iterations
 
         if self._switch_interval is None:
-            self._switch_interval = max(1, int(max_iterations * self.DEFAULT_SWITCH_RATIO))
-            logger.info(f"Switch if {self._switch_interval} iterations of stagnation detected")
+            if max_iterations is None:
+                self._switch_interval = self.DEFAULT_UNBOUNDED_SWITCH_INTERVAL
+                logger.info(
+                    "Switch interval not set; using default unbounded EvoX window "
+                    f"of {self._switch_interval} iterations"
+                )
+            else:
+                self._switch_interval = max(1, int(max_iterations * self.DEFAULT_SWITCH_RATIO))
+                logger.info(
+                    f"Switch if {self._switch_interval} iterations of stagnation detected"
+                )
 
         self.start_db_stats = self.database.get_statistics(
             improvement_threshold=self.DEFAULT_IMPROVEMENT_THRESHOLD
@@ -122,7 +134,7 @@ class CoEvolutionController(DiscoveryController):
 
         # Run co-evolution
         iteration = start_iteration
-        while iteration < self.total_solution_iterations:
+        while self.total_solution_iterations is None or iteration < self.total_solution_iterations:
             if self.shutdown_event.is_set():
                 logger.info("Shutdown requested")
                 break
@@ -150,7 +162,11 @@ class CoEvolutionController(DiscoveryController):
                 iteration += attempts_used
 
                 # Co-evolve search strategy if needed (skip on final iteration)
-                if iteration < self.total_solution_iterations and self._should_evolve_search():
+                has_remaining_budget = (
+                    self.total_solution_iterations is None
+                    or iteration < self.total_solution_iterations
+                )
+                if has_remaining_budget and self._should_evolve_search():
                     logger.info(
                         f"Stagnation detected -> evolving search strategy (solution_iter={completed_solution_iter})"
                     )

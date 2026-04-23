@@ -548,7 +548,7 @@ class Config:
     """Master configuration for SkyDiscover"""
 
     # General settings
-    max_iterations: int = 100
+    max_iterations: Optional[int] = 100
     checkpoint_interval: int = 10
     log_level: str = "INFO"
     log_dir: Optional[str] = None
@@ -838,6 +838,29 @@ def build_output_dir(search_type: str, initial_program_path: str, base_dir: str 
     )
     timestamp = datetime.now().strftime("%m%d_%H%M")
     return os.path.join(base_dir, search_type, f"{problem_name}_{timestamp}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Runtime budget resolution
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def resolve_iteration_budget(
+    config: Config,
+    *,
+    iterations: Optional[int] = None,
+    run_forever: bool = False,
+) -> Optional[int]:
+    """Resolve the effective iteration budget for a run."""
+    if run_forever and iterations is not None:
+        raise ValueError("Cannot specify both iterations and run_forever=True.")
+
+    budget = None if run_forever else (iterations if iterations is not None else config.max_iterations)
+
+    if budget is not None and budget < 0:
+        raise ValueError("max_iterations / iterations must be >= 0, or null for unbounded runs.")
+
+    return budget
 
 
 # ═══════════════════════════════════════════════════════════════════════

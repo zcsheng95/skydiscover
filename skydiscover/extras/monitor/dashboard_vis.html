@@ -1,0 +1,3454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SkyDiscover VIS Monitor</title>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<style>
+  :root {
+    --bg: #fbfbfb;
+    --bg-soft: #f5f5f5;
+    --panel: #ffffff;
+    --panel-strong: #ffffff;
+    --text: #242730;
+    --text-soft: #6a707a;
+    --line: rgba(36, 39, 48, 0.12);
+    --line-strong: rgba(36, 39, 48, 0.22);
+    --blue: #4b79b9;
+    --orange: #f28d33;
+    --green: #2e8b57;
+    --red: #d85a5a;
+    --purple: #7a68e0;
+    --teal: #327f85;
+    --gold: #c18a1a;
+    --shadow: none;
+    --radius-lg: 16px;
+    --radius-md: 12px;
+    --radius-sm: 8px;
+    --mono: "SFMono-Regular", "Menlo", "Monaco", "Courier New", monospace;
+    --sans: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+    --plot-grid: rgba(36, 39, 48, 0.08);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+  }
+
+  body {
+    font-family: var(--sans);
+    color: var(--text);
+    background: var(--bg);
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  .shell {
+    min-height: 100vh;
+    padding: 0;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--line);
+    background: #ffffff;
+  }
+
+  .title-cluster {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .eyebrow {
+    display: none;
+  }
+
+  .page-title {
+    margin: 0;
+    font-size: clamp(24px, 3vw, 30px);
+    line-height: 1.1;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    white-space: nowrap;
+  }
+
+  .page-subtitle {
+    display: none;
+  }
+
+  .top-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+    max-width: none;
+  }
+
+  .metric-picker {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: none;
+  }
+
+  .metric-picker span {
+    font-size: 12px;
+    color: var(--text-soft);
+    text-transform: lowercase;
+  }
+
+  .metric-picker select {
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    min-width: 170px;
+    outline: none;
+  }
+
+  .series-controls,
+  .action-cluster {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .series-chip,
+  .action-btn,
+  .status-pill,
+  .meta-chip,
+  .tag-chip {
+    border-radius: 999px;
+    border: 1px solid transparent;
+  }
+
+  .series-chip {
+    padding: 6px 14px;
+    background: #ffffff;
+    border: 1px solid var(--line);
+    color: var(--text-soft);
+    cursor: pointer;
+    transition: background 0.16s ease, border-color 0.16s ease, opacity 0.16s ease;
+    font-weight: 600;
+  }
+
+  .series-chip:hover {
+    border-color: var(--line-strong);
+    background: var(--bg-soft);
+  }
+
+  .series-chip[data-active="true"] {
+    background: #ffffff;
+    color: var(--series-color, var(--text));
+    border-color: color-mix(in srgb, var(--series-color, var(--blue)) 68%, white);
+  }
+
+  .series-chip[data-faded="true"] {
+    opacity: 0.45;
+  }
+
+  .action-btn {
+    padding: 7px 14px;
+    background: #ffffff;
+    color: var(--text);
+    border-color: var(--line);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    font-weight: 600;
+  }
+
+  .action-btn:hover:not(:disabled) {
+    background: var(--bg-soft);
+    border-color: var(--line-strong);
+  }
+
+  .action-btn.stop {
+    background: rgba(216, 90, 90, 0.08);
+    border-color: rgba(216, 90, 90, 0.18);
+    color: var(--red);
+  }
+
+  .action-btn:disabled {
+    opacity: 0.42;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .status-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 16px;
+    margin: 0;
+    border-bottom: 1px solid var(--line);
+    background: #ffffff;
+  }
+
+  .status-left,
+  .status-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .status-pill,
+  .meta-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 11px;
+    background: #ffffff;
+    border-color: rgba(36, 39, 48, 0.12);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .status-pill.connected {
+    color: var(--green);
+    background: rgba(46, 139, 87, 0.08);
+    border-color: rgba(46, 139, 87, 0.16);
+  }
+
+  .status-pill.disconnected {
+    color: var(--red);
+    background: rgba(216, 90, 90, 0.08);
+    border-color: rgba(216, 90, 90, 0.16);
+  }
+
+  .status-pill.running {
+    color: var(--green);
+  }
+
+  .status-pill.paused {
+    color: var(--orange);
+  }
+
+  .status-pill.completed {
+    color: var(--blue);
+  }
+
+  .status-pill.replay {
+    color: var(--blue);
+  }
+
+  .status-pill.failed {
+    color: var(--red);
+  }
+
+  .status-pill.unknown {
+    color: var(--text-soft);
+  }
+
+  .meta-chip strong {
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .status-note {
+    font-size: 12px;
+    color: var(--text-soft);
+  }
+
+  .status-note.error {
+    color: var(--red);
+  }
+
+  .toast {
+    margin-bottom: 12px;
+    padding: 10px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(75, 121, 185, 0.18);
+    background: rgba(75, 121, 185, 0.08);
+    color: var(--blue);
+    font-size: 13px;
+    display: none;
+  }
+
+  .toast.visible {
+    display: block;
+  }
+
+  .toast.error {
+    border-color: rgba(216, 90, 90, 0.18);
+    background: rgba(216, 90, 90, 0.08);
+    color: var(--red);
+  }
+
+  .workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 460px;
+    gap: 0;
+    align-items: start;
+  }
+
+  .chart-stage,
+  .inspector-section,
+  .utility-panel {
+    background: var(--panel-strong);
+    border: 0;
+    box-shadow: var(--shadow);
+  }
+
+  .chart-stage {
+    min-height: calc(100vh - 124px);
+    border-right: 1px solid var(--line);
+    padding: 14px 18px 10px;
+    overflow: hidden;
+  }
+
+  .chart-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+  .chart-title {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+  }
+
+  .chart-caption {
+    margin-top: 3px;
+    font-size: 12px;
+    color: var(--text-soft);
+    line-height: 1.45;
+  }
+
+  .chart-metrics {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .chart-metric {
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: #ffffff;
+    border: 1px solid rgba(36, 39, 48, 0.12);
+    font-size: 12px;
+    color: var(--text-soft);
+  }
+
+  .chart-metric strong {
+    color: var(--text);
+  }
+
+  #vis-plot {
+    width: 100%;
+    height: calc(100vh - 220px);
+    min-height: 480px;
+  }
+
+  .inspector {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    position: sticky;
+    top: 0;
+    max-height: calc(100vh - 124px);
+    overflow: auto;
+    padding-right: 0;
+  }
+
+  .inspector-section {
+    padding: 18px 20px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .inspector-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .inspector-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .series-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--badge-color, var(--blue)) 55%, white);
+    background: color-mix(in srgb, var(--badge-color, var(--blue)) 10%, white);
+    color: var(--badge-color, var(--blue));
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .ghost-link {
+    border: 0;
+    background: transparent;
+    color: var(--text-soft);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 4px 6px;
+  }
+
+  .ghost-link:hover {
+    color: var(--text);
+  }
+
+  .inspector-empty {
+    padding: 8px 0 4px;
+    color: var(--text-soft);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .meta-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+
+  .meta-line {
+    display: grid;
+    grid-template-columns: 92px minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.35;
+  }
+
+  .meta-key {
+    color: var(--text-soft);
+  }
+
+  .meta-value {
+    color: var(--text);
+    word-break: break-word;
+  }
+
+  .meta-value.mono {
+    font-size: 13px;
+  }
+
+  .meta-value.score {
+    color: var(--green);
+    font-weight: 700;
+  }
+
+  .secondary-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+
+  .tag-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+
+  .tag-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .tag-row .tag-label {
+    min-width: 92px;
+    padding-top: 4px;
+    font-size: 12px;
+    color: var(--text-soft);
+  }
+
+  .tag-list {
+    display: flex;
+    gap: 7px;
+    flex-wrap: wrap;
+  }
+
+  .tag-chip {
+    padding: 5px 10px;
+    background: #ffffff;
+    border-color: rgba(36, 39, 48, 0.12);
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .tag-chip.parent {
+    color: var(--red);
+    background: rgba(216, 90, 90, 0.08);
+    border-color: rgba(216, 90, 90, 0.16);
+  }
+
+  .tag-chip.context {
+    color: var(--purple);
+    background: rgba(122, 104, 224, 0.08);
+    border-color: rgba(122, 104, 224, 0.16);
+  }
+
+  .tag-chip.child {
+    color: var(--green);
+    background: rgba(46, 139, 87, 0.08);
+    border-color: rgba(46, 139, 87, 0.16);
+  }
+
+  .tag-chip.usage {
+    color: var(--blue);
+    background: rgba(75, 121, 185, 0.08);
+    border-color: rgba(75, 121, 185, 0.16);
+  }
+
+  .tag-chip.inactive {
+    cursor: default;
+    color: var(--text-soft);
+  }
+
+  .tag-overflow {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 2px;
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .candidate-details-block {
+    margin-bottom: 18px;
+  }
+
+  .candidate-details-block .meta-stack {
+    margin-bottom: 12px;
+  }
+
+  .candidate-details-block .tag-group {
+    margin-bottom: 0;
+    gap: 12px;
+  }
+
+  .candidate-details-block .secondary-row {
+    margin-bottom: 12px;
+  }
+
+  .preview-card {
+    margin-bottom: 16px;
+    padding: 0;
+    border-radius: 12px;
+    background: #ffffff;
+    border: 1px solid rgba(36, 39, 48, 0.12);
+  }
+
+  .candidate-focus {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px;
+    margin-bottom: 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(36, 39, 48, 0.12);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 248, 251, 0.96));
+  }
+
+  .candidate-focus-copy {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .candidate-focus-kicker {
+    margin-bottom: 6px;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+  }
+
+  .candidate-focus-title {
+    font-size: 20px;
+    font-weight: 700;
+    line-height: 1.2;
+    color: var(--text);
+  }
+
+  .candidate-focus-subtitle {
+    margin-top: 6px;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--text-soft);
+    word-break: break-word;
+  }
+
+  .candidate-focus-score {
+    flex: 0 0 auto;
+    min-width: 132px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(46, 139, 87, 0.16);
+    background: rgba(46, 139, 87, 0.08);
+  }
+
+  .candidate-focus-score-label {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--green);
+  }
+
+  .candidate-focus-score-value {
+    margin-top: 4px;
+    font-size: 26px;
+    font-weight: 700;
+    line-height: 1.1;
+    color: var(--green);
+  }
+
+  .candidate-chip-row {
+    margin-bottom: 16px;
+  }
+
+  .candidate-note {
+    margin: -4px 0 16px;
+    font-size: 12px;
+    color: var(--text-soft);
+    line-height: 1.55;
+  }
+
+  .preview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 12px 0;
+    margin-bottom: 8px;
+  }
+
+  .preview-title {
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+  }
+
+  .preview-body {
+    min-height: 160px;
+    border-radius: 0 0 12px 12px;
+    overflow: hidden;
+    background: #ffffff;
+    border-top: 1px solid rgba(36, 39, 48, 0.12);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .preview-body img {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 320px;
+    object-fit: contain;
+  }
+
+  .branch-composer-card {
+    margin-top: 18px;
+    padding: 0;
+    border-radius: 12px;
+    background: #ffffff;
+    border: 1px solid rgba(36, 39, 48, 0.12);
+    overflow: hidden;
+  }
+
+  .branch-composer-body {
+    padding: 12px;
+    border-top: 1px solid rgba(36, 39, 48, 0.12);
+  }
+
+  .branch-composer-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 12px 0;
+  }
+
+  .branch-composer-copy {
+    min-width: 0;
+  }
+
+  .branch-composer-copy .summary-status {
+    margin-top: 4px;
+  }
+
+  .branch-composer-input {
+    min-height: 132px;
+    margin-top: 10px;
+  }
+
+  .branch-source-summary {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+  }
+
+  .branch-source-summary strong {
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .branch-source-subtle {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--text-soft);
+    word-break: break-word;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(36, 39, 48, 0.12);
+    background: rgba(34, 36, 41, 0.04);
+    color: var(--text-soft);
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .status-pill.ready {
+    color: var(--green);
+    border-color: rgba(46, 139, 87, 0.16);
+    background: rgba(46, 139, 87, 0.08);
+  }
+
+  .status-pill.loading {
+    color: var(--blue);
+    border-color: rgba(75, 121, 185, 0.16);
+    background: rgba(75, 121, 185, 0.08);
+  }
+
+  .status-pill.disabled {
+    color: var(--text-soft);
+  }
+
+  .preview-empty,
+  .mini-empty {
+    color: var(--text-soft);
+    font-size: 13px;
+    line-height: 1.5;
+    text-align: center;
+    padding: 20px;
+  }
+
+  .alert-box {
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(216, 90, 90, 0.16);
+    background: rgba(216, 90, 90, 0.08);
+    color: #a03e3e;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+
+  .narrative-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-soft);
+    margin-bottom: 8px;
+  }
+
+  .content-card {
+    margin-bottom: 16px;
+    padding: 14px;
+    border-radius: 12px;
+    background: #ffffff;
+    border: 1px solid rgba(36, 39, 48, 0.12);
+  }
+
+  .narrative-body,
+  .summary-body {
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text);
+  }
+
+  .narrative-body p,
+  .summary-body p {
+    margin: 0 0 12px;
+  }
+
+  .narrative-body ul,
+  .summary-body ul {
+    margin: 0 0 12px 18px;
+    padding: 0;
+  }
+
+  .narrative-body li,
+  .summary-body li {
+    margin-bottom: 6px;
+  }
+
+  .narrative-body code,
+  .summary-body code {
+    font-family: var(--mono);
+    font-size: 0.92em;
+    background: rgba(34, 36, 41, 0.06);
+    padding: 2px 5px;
+    border-radius: 6px;
+  }
+
+  .utility-panel {
+    border-bottom: 1px solid var(--line);
+    overflow: hidden;
+  }
+
+  /* Keep the summary/feedback wiring intact but hide these panels in the VIS dashboard. */
+  #summary-panel,
+  #feedback-panel {
+    display: none;
+  }
+
+  .utility-panel summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 20px;
+    font-weight: 700;
+  }
+
+  .utility-panel summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .utility-summary-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .utility-kicker {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+  }
+
+  .utility-indicator {
+    font-size: 12px;
+    color: var(--text-soft);
+  }
+
+  .utility-content {
+    padding: 0 20px 16px;
+    border-top: 1px solid rgba(36, 39, 48, 0.08);
+  }
+
+  .code-view {
+    margin: 0;
+    padding: 12px;
+    border-radius: 10px;
+    background: #f7f7f7;
+    border: 1px solid rgba(36, 39, 48, 0.12);
+    color: #2a2d33;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.6;
+    overflow: auto;
+    max-height: 320px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .code-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .code-tab {
+    padding: 7px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(36, 39, 48, 0.12);
+    background: #ffffff;
+    color: var(--text-soft);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .code-tab.active {
+    color: var(--text);
+    background: var(--bg-soft);
+    border-color: rgba(36, 39, 48, 0.18);
+  }
+
+  .hf-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 11px;
+    border-radius: 999px;
+    font-size: 12px;
+    margin: 12px 0 10px;
+    background: rgba(34, 36, 41, 0.05);
+    color: var(--text-soft);
+  }
+
+  .hf-status.active {
+    color: var(--green);
+    background: rgba(46, 139, 87, 0.08);
+  }
+
+  .hf-status.disabled {
+    color: var(--red);
+    background: rgba(216, 90, 90, 0.08);
+  }
+
+  .mode-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+
+  .mode-btn,
+  .inline-btn {
+    padding: 8px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(34, 36, 41, 0.1);
+    background: rgba(34, 36, 41, 0.04);
+    color: var(--text-soft);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .mode-btn.active {
+    color: var(--teal);
+    border-color: rgba(50, 127, 133, 0.2);
+    background: rgba(50, 127, 133, 0.08);
+  }
+
+  .inline-btn.primary {
+    color: var(--blue);
+    border-color: rgba(75, 121, 185, 0.16);
+    background: rgba(75, 121, 185, 0.08);
+  }
+
+  .inline-btn.warn {
+    color: var(--red);
+    border-color: rgba(216, 90, 90, 0.16);
+    background: rgba(216, 90, 90, 0.08);
+  }
+
+  .inline-btn:disabled,
+  .mode-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  .hf-textarea {
+    width: 100%;
+    min-height: 110px;
+    resize: vertical;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(36, 39, 48, 0.12);
+    background: #ffffff;
+    color: var(--text);
+    line-height: 1.6;
+    outline: none;
+  }
+
+  .action-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+  }
+
+  .mini-panel {
+    margin-top: 12px;
+    padding: 12px;
+    border-radius: 10px;
+    background: #f8f8f8;
+    border: 1px solid rgba(36, 39, 48, 0.12);
+  }
+
+  .mini-title {
+    margin-bottom: 8px;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+  }
+
+  .mini-copy {
+    font-size: 13px;
+    line-height: 1.65;
+    color: var(--text);
+    white-space: pre-wrap;
+  }
+
+  .history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .history-item {
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(36, 39, 48, 0.12);
+    background: #ffffff;
+  }
+
+  .history-meta {
+    margin-bottom: 5px;
+    font-size: 11px;
+    color: var(--text-soft);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .history-mode {
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(34, 36, 41, 0.06);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .history-text {
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--text);
+    white-space: pre-wrap;
+  }
+
+  .summary-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 12px 0 10px;
+    flex-wrap: wrap;
+  }
+
+  .summary-status {
+    font-size: 12px;
+    color: var(--text-soft);
+  }
+
+  .inspector-details {
+    margin-top: 18px;
+    border-radius: 12px;
+    border: 1px solid rgba(36, 39, 48, 0.12);
+    background: #ffffff;
+    overflow: hidden;
+  }
+
+  .inspector-details summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .inspector-details summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .inspector-details-body {
+    padding: 0 14px 14px;
+    border-top: 1px solid rgba(36, 39, 48, 0.08);
+  }
+
+  .details-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .detail-card {
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: #f8f8f8;
+    border: 1px solid rgba(36, 39, 48, 0.1);
+  }
+
+  .detail-label {
+    margin-bottom: 4px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+  }
+
+  .detail-value {
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text);
+    word-break: break-word;
+  }
+
+  .detail-value.mono {
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  .detail-value.score {
+    color: var(--green);
+    font-weight: 700;
+  }
+
+  .detail-tag-group {
+    margin-top: 12px;
+    margin-bottom: 0;
+    gap: 12px;
+  }
+
+  .detail-tag-group .tag-row {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .detail-tag-group .tag-row .tag-label {
+    min-width: 0;
+    padding-top: 0;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  @media (max-width: 1280px) {
+    .workspace {
+      grid-template-columns: minmax(0, 1fr) 400px;
+    }
+  }
+
+  @media (max-width: 1080px) {
+    .topbar {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .title-cluster {
+      align-items: flex-start;
+    }
+
+    .top-controls {
+      max-width: none;
+      justify-content: flex-start;
+    }
+
+    .workspace {
+      grid-template-columns: 1fr;
+    }
+
+    .inspector {
+      position: static;
+      max-height: none;
+      overflow: visible;
+    }
+
+    .chart-stage {
+      min-height: auto;
+      border-right: 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    #vis-plot {
+      height: 62vh;
+      min-height: 420px;
+    }
+  }
+
+  @media (max-width: 720px) {
+    .shell {
+      padding: 0;
+    }
+
+    .topbar,
+    .status-strip,
+    .chart-stage,
+    .inspector-section,
+    .utility-panel {
+      padding-left: 14px;
+      padding-right: 14px;
+    }
+
+    .meta-line {
+      grid-template-columns: 84px minmax(0, 1fr);
+      gap: 10px;
+    }
+
+    .candidate-focus {
+      flex-direction: column;
+    }
+
+    .candidate-focus-score {
+      width: 100%;
+      min-width: 0;
+    }
+
+    #vis-plot {
+      height: 54vh;
+      min-height: 360px;
+    }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="title-cluster">
+      <div class="eyebrow">SkyDiscover Evolution Monitor</div>
+      <h1 id="page-title" class="page-title">VIS — skydiscover · live-run</h1>
+      <div class="page-subtitle">
+        Track the search frontier, inspect candidate lineage, and manage long-running native runs without leaving the visualization surface.
+      </div>
+    </div>
+
+    <div class="top-controls">
+      <label class="metric-picker" for="metric-select">
+        <span>metric</span>
+        <select id="metric-select"></select>
+      </label>
+      <div id="series-controls" class="series-controls"></div>
+      <div class="action-cluster">
+        <button id="start-button" class="action-btn" type="button" disabled>Start</button>
+        <button id="resume-button" class="action-btn" type="button" disabled>Resume</button>
+        <button id="stop-button" class="action-btn stop" type="button" disabled>Stop</button>
+      </div>
+    </div>
+  </header>
+
+  <section class="status-strip">
+    <div class="status-left">
+      <span id="connection-pill" class="status-pill disconnected">disconnected</span>
+      <span id="run-status-pill" class="status-pill unknown">unknown</span>
+      <span id="program-count-chip" class="meta-chip">programs <strong>0</strong></span>
+      <span id="best-score-chip" class="meta-chip">best <strong>--</strong></span>
+      <span id="remaining-chip" class="meta-chip">remaining <strong>--</strong></span>
+      <span id="last-event-chip" class="meta-chip">last event <strong>--</strong></span>
+      <span id="checkpoint-chip" class="meta-chip">checkpoint <strong>--</strong></span>
+    </div>
+    <div class="status-right">
+      <span id="hint-note" class="status-note">click a point for details · hover a series to focus · double-click the plot to clear selection</span>
+    </div>
+  </section>
+
+  <div id="toast" class="toast"></div>
+
+  <main class="workspace">
+    <section class="chart-stage">
+      <div class="chart-head">
+        <div>
+          <div class="chart-title">Evolution Trace</div>
+          <div class="chart-caption">
+            Low-emphasis dots show all candidates, dotted paths track best-so-far progress, and diamond markers indicate new-best discoveries.
+          </div>
+        </div>
+        <div class="chart-metrics">
+          <div id="run-chip" class="chart-metric">run <strong>live-run</strong></div>
+          <div id="metric-chip" class="chart-metric">metric <strong>combined_score</strong></div>
+          <div id="freshness-chip" class="chart-metric">updated <strong>--</strong></div>
+        </div>
+      </div>
+      <div id="vis-plot"></div>
+    </section>
+
+    <aside class="inspector">
+      <section class="inspector-section">
+        <div class="inspector-header">
+          <div class="inspector-label">
+            <div id="selected-series-badge" class="series-badge">No selection</div>
+          </div>
+          <button id="clear-selection-button" class="ghost-link" type="button">clear</button>
+        </div>
+        <div id="inspector-main" class="inspector-empty">
+          Select a candidate to inspect its score, lineage, artifact preview, and generated insight.
+        </div>
+      </section>
+
+      <details id="raw-panel" class="utility-panel">
+        <summary>
+          <div class="utility-summary-left">
+            <div>Raw Solution</div>
+          </div>
+          <div id="raw-indicator" class="utility-indicator">select a candidate</div>
+        </summary>
+        <div class="utility-content">
+          <div class="code-tabs">
+            <button class="code-tab active" id="code-tab-current" type="button">Current</button>
+            <button class="code-tab" id="code-tab-parent" type="button">Parent</button>
+          </div>
+          <pre id="raw-solution-view" class="code-view">Select a candidate to inspect its solution.</pre>
+        </div>
+      </details>
+
+      <details id="summary-panel" class="utility-panel">
+        <summary>
+          <div class="utility-summary-left">
+            <div>Run Summary</div>
+          </div>
+          <div id="summary-indicator" class="utility-indicator">manual</div>
+        </summary>
+        <div class="utility-content">
+          <div class="summary-actions">
+            <div id="summary-status" class="summary-status">Summary refresh is manual in this view.</div>
+            <button id="summary-refresh-button" class="inline-btn primary" type="button">Refresh</button>
+          </div>
+          <div id="summary-body" class="summary-body">
+            <p>No global summary yet.</p>
+          </div>
+        </div>
+      </details>
+
+      <details id="feedback-panel" class="utility-panel">
+        <summary>
+          <div class="utility-summary-left">
+            <div>Human Feedback</div>
+          </div>
+          <div id="feedback-indicator" class="utility-indicator">inactive</div>
+        </summary>
+        <div class="utility-content">
+          <div id="hf-status" class="hf-status disabled">Human feedback is not enabled for this run.</div>
+
+          <div class="mode-row">
+            <button id="hf-mode-append" class="mode-btn active" type="button">Append</button>
+            <button id="hf-mode-replace" class="mode-btn" type="button">Replace</button>
+          </div>
+
+          <textarea
+            id="hf-input"
+            class="hf-textarea"
+            placeholder="Add short steering instructions for the next iterations."
+          ></textarea>
+
+          <div class="action-row">
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button id="hf-send-button" class="inline-btn primary" type="button">Send feedback</button>
+              <button id="hf-clear-button" class="inline-btn warn" type="button">Clear</button>
+            </div>
+            <div id="hf-mode-caption" class="summary-status">Append mode adds your text after the system prompt.</div>
+          </div>
+
+          <div class="mini-panel">
+            <div class="mini-title">Current Prompt</div>
+            <div id="hf-prompt-body" class="mini-copy mini-empty">Prompt text will appear here when available.</div>
+          </div>
+
+          <div class="mini-panel">
+            <div class="mini-title">Feedback History</div>
+            <div id="hf-history-body" class="history-list">
+              <div class="mini-empty">No feedback history yet.</div>
+            </div>
+          </div>
+        </div>
+      </details>
+
+    </aside>
+  </main>
+</div>
+
+<script>
+(function() {
+  "use strict";
+
+  const SERIES_COLORS = [
+    "#4b79b9",
+    "#f28d33",
+    "#3b936b",
+    "#7a68e0",
+    "#c85b62",
+    "#2e8c99",
+    "#c18a1a",
+    "#7182bc",
+  ];
+
+  const state = {
+    programs: [],
+    programMap: {},
+    bestProgramId: null,
+    stats: {},
+    selectedId: null,
+    metricKey: "combined_score",
+    availableMetrics: [],
+    visibleSeries: {},
+    hoveredSeries: null,
+    connectionState: "disconnected",
+    runLabel: "live-run",
+    seriesLabel: "skydiscover",
+    runState: {},
+    lastEventAt: null,
+    controlCapabilities: { start: false, resume: false, stop: false },
+    branchCapabilities: { create: false },
+    imageCache: {},
+    solutionCache: {},
+    summaryCache: {},
+    pendingSummaryIds: {},
+    activeCodeTab: "current",
+    summaryEnabled: false,
+    summaryGenerating: false,
+    summaryText: "",
+    hfEnabled: false,
+    hfActive: false,
+    hfMode: "append",
+    hfPrompt: "",
+    hfHistory: [],
+    hfText: "",
+    branchDrafts: {},
+    feedbackPanelPrimed: false,
+    plotBound: false,
+    childrenIndex: {},
+    contextUsedByIndex: {},
+    plotDataVersion: 0,
+    lastRenderedPlotKey: "",
+    lastMetricOptionsHtml: "",
+    lastSeriesControlsHtml: "",
+    lastInspectorHtml: "",
+    lastRawIndicatorText: "",
+    lastRawBodyText: "",
+    hoverTimer: null,
+    pendingHoveredSeries: null,
+    renderScheduled: false,
+    renderDirty: {
+      header: true,
+      seriesControls: true,
+      status: true,
+      plot: true,
+      inspector: true,
+      raw: true,
+      summary: true,
+      feedback: true,
+    },
+  };
+
+  const els = {
+    metricSelect: document.getElementById("metric-select"),
+    seriesControls: document.getElementById("series-controls"),
+    pageTitle: document.getElementById("page-title"),
+    connectionPill: document.getElementById("connection-pill"),
+    runStatusPill: document.getElementById("run-status-pill"),
+    programCountChip: document.getElementById("program-count-chip"),
+    bestScoreChip: document.getElementById("best-score-chip"),
+    remainingChip: document.getElementById("remaining-chip"),
+    lastEventChip: document.getElementById("last-event-chip"),
+    checkpointChip: document.getElementById("checkpoint-chip"),
+    runChip: document.getElementById("run-chip"),
+    metricChip: document.getElementById("metric-chip"),
+    freshnessChip: document.getElementById("freshness-chip"),
+    hintNote: document.getElementById("hint-note"),
+    stopButton: document.getElementById("stop-button"),
+    startButton: document.getElementById("start-button"),
+    resumeButton: document.getElementById("resume-button"),
+    toast: document.getElementById("toast"),
+    plot: document.getElementById("vis-plot"),
+    selectedSeriesBadge: document.getElementById("selected-series-badge"),
+    inspectorMain: document.getElementById("inspector-main"),
+    clearSelectionButton: document.getElementById("clear-selection-button"),
+    rawIndicator: document.getElementById("raw-indicator"),
+    rawSolutionView: document.getElementById("raw-solution-view"),
+    codeTabCurrent: document.getElementById("code-tab-current"),
+    codeTabParent: document.getElementById("code-tab-parent"),
+    summaryIndicator: document.getElementById("summary-indicator"),
+    summaryStatus: document.getElementById("summary-status"),
+    summaryRefreshButton: document.getElementById("summary-refresh-button"),
+    summaryBody: document.getElementById("summary-body"),
+    feedbackPanel: document.getElementById("feedback-panel"),
+    feedbackIndicator: document.getElementById("feedback-indicator"),
+    hfStatus: document.getElementById("hf-status"),
+    hfModeAppend: document.getElementById("hf-mode-append"),
+    hfModeReplace: document.getElementById("hf-mode-replace"),
+    hfModeCaption: document.getElementById("hf-mode-caption"),
+    hfInput: document.getElementById("hf-input"),
+    hfSendButton: document.getElementById("hf-send-button"),
+    hfClearButton: document.getElementById("hf-clear-button"),
+    hfPromptBody: document.getElementById("hf-prompt-body"),
+    hfHistoryBody: document.getElementById("hf-history-body"),
+  };
+
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${proto}//${location.host}`);
+    state.ws = ws;
+
+    ws.onopen = function() {
+      state.connectionState = "connected";
+      scheduleRender(["status"]);
+    };
+
+    ws.onclose = function() {
+      state.connectionState = "disconnected";
+      scheduleRender(["status"]);
+      window.setTimeout(connect, 2000);
+    };
+
+    ws.onerror = function() {
+      ws.close();
+    };
+
+    ws.onmessage = function(evt) {
+      let msg;
+      try {
+        msg = JSON.parse(evt.data);
+      } catch (err) {
+        return;
+      }
+      handleMessage(msg);
+    };
+  }
+
+  function send(payload) {
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    state.ws.send(JSON.stringify(payload));
+    return true;
+  }
+
+  function markPlotDataDirty() {
+    state.plotDataVersion += 1;
+  }
+
+  function markDirty(parts) {
+    parts.forEach(function(part) {
+      state.renderDirty[part] = true;
+    });
+  }
+
+  function flushRender() {
+    const dirty = Object.assign({}, state.renderDirty);
+    Object.keys(state.renderDirty).forEach(function(key) {
+      state.renderDirty[key] = false;
+    });
+
+    if (dirty.header) {
+      renderHeader();
+    }
+    if (dirty.seriesControls) {
+      renderSeriesControls();
+    }
+    if (dirty.status) {
+      renderStatus();
+    }
+    if (dirty.plot) {
+      renderPlot();
+    }
+    if (dirty.inspector) {
+      renderInspector();
+    }
+    if (dirty.raw) {
+      renderRawSolution();
+    }
+    if (dirty.summary) {
+      renderSummaryPanel();
+    }
+    if (dirty.feedback) {
+      renderFeedbackPanel();
+    }
+  }
+
+  function scheduleRender(parts) {
+    markDirty(parts);
+    if (state.renderScheduled) {
+      return;
+    }
+    state.renderScheduled = true;
+    window.requestAnimationFrame(function() {
+      state.renderScheduled = false;
+      flushRender();
+    });
+  }
+
+  function renderNow(parts) {
+    markDirty(parts);
+    flushRender();
+  }
+
+  function setHoveredSeries(seriesKey) {
+    const nextSeries = seriesKey || null;
+    state.pendingHoveredSeries = nextSeries;
+    if (state.hoverTimer) {
+      window.clearTimeout(state.hoverTimer);
+    }
+    state.hoverTimer = window.setTimeout(function() {
+      state.hoverTimer = null;
+      if (state.hoveredSeries === state.pendingHoveredSeries) {
+        return;
+      }
+      state.hoveredSeries = state.pendingHoveredSeries;
+      scheduleRender(["seriesControls", "plot"]);
+    }, 48);
+  }
+
+  function handleMessage(msg) {
+    syncEnvelope(msg);
+
+    switch (msg.type) {
+      case "init_state":
+        state.programs = Array.isArray(msg.programs)
+          ? msg.programs
+            .map(normalizeProgram)
+            .filter(function(program) {
+              return isProgramForActiveRun(program);
+            })
+          : [];
+        rebuildProgramMap();
+        state.bestProgramId = msg.best_program_id || null;
+        state.stats = msg.stats || {};
+        state.summaryEnabled = !!msg.summary_enabled;
+        state.summaryGenerating = !!msg.summary_generating;
+        state.summaryText = msg.summary_text || "";
+        state.branchCapabilities = msg.branch_capabilities || state.branchCapabilities;
+        state.hfEnabled = !!msg.human_feedback_enabled;
+        state.hfActive = !!msg.feedback_active;
+        state.hfMode = msg.human_feedback_mode || "append";
+        state.hfPrompt = msg.human_feedback_current_prompt || "";
+        state.hfHistory = Array.isArray(msg.human_feedback_history) ? msg.human_feedback_history : [];
+        state.hfText = msg.feedback_text || "";
+        rebuildIndexes();
+        ensureMetrics();
+        ensureSeriesVisibility();
+        markPlotDataDirty();
+        if (!state.selectedId && state.bestProgramId && state.programMap[state.bestProgramId]) {
+          state.selectedId = state.bestProgramId;
+        } else if (!state.selectedId && state.programs.length) {
+          const fallbackProgram = getBestProgram() || state.programs[state.programs.length - 1];
+          state.selectedId = fallbackProgram ? fallbackProgram.id : null;
+        }
+        ensureSelectionVisible();
+        renderNow(["header", "seriesControls", "status", "plot", "inspector", "raw", "summary", "feedback"]);
+        primeSelectedProgram();
+        if (state.hfEnabled) {
+          maybePrimeFeedbackData();
+        }
+        break;
+
+      case "new_program":
+        if (!msg.program) {
+          break;
+        }
+        {
+          const previousSelectedId = state.selectedId;
+          const program = normalizeProgram(msg.program);
+          if (!isProgramForActiveRun(program)) {
+            break;
+          }
+          if (program.id && state.programMap[program.id]) {
+            state.programMap[program.id] = program;
+            state.programs = state.programs.map(function(existing) {
+              return existing.id === program.id ? program : existing;
+            });
+            rebuildIndexes();
+          } else {
+            state.programs.push(program);
+            state.programMap[program.id] = program;
+            addToIndexes(program);
+          }
+          markPlotDataDirty();
+          state.stats = msg.stats || state.stats;
+          if (msg.is_best || !state.bestProgramId || compareScores(program.id, state.bestProgramId) > 0) {
+            state.bestProgramId = program.id;
+            if (!state.selectedId) {
+              state.selectedId = program.id;
+            }
+          }
+          if (typeof msg.feedback_active === "boolean") {
+            state.hfActive = msg.feedback_active;
+          }
+          if (typeof msg.feedback_text === "string") {
+            state.hfText = msg.feedback_text;
+          }
+          if (typeof msg.human_feedback_mode === "string") {
+            state.hfMode = msg.human_feedback_mode;
+          }
+          ensureMetrics();
+          ensureSeriesVisibility();
+          ensureSelectionVisible();
+          const dirtyParts = ["header", "seriesControls", "status", "plot"];
+          if (
+            state.selectedId !== previousSelectedId
+            || selectedNeedsInspectorRefresh(program)
+          ) {
+            dirtyParts.push("inspector");
+          }
+          if (state.selectedId !== previousSelectedId) {
+            dirtyParts.push("raw");
+          }
+          scheduleRender(dirtyParts);
+          if (state.selectedId === program.id || state.selectedId !== previousSelectedId) {
+            primeSelectedProgram();
+          }
+        }
+        break;
+
+      case "discovery_complete":
+        if (!state.runState || typeof state.runState !== "object") {
+          state.runState = {};
+        }
+        if (!state.runState.status) {
+          state.runState.status = "completed";
+        }
+        scheduleRender(["status"]);
+        break;
+
+      case "program_solution":
+        state.solutionCache[msg.program_id] = {
+          solution: msg.solution || "",
+          parent_solution: msg.parent_solution || "",
+        };
+        if (state.selectedId === msg.program_id) {
+          scheduleRender(["inspector", "raw"]);
+        }
+        break;
+
+      case "program_summary":
+        state.summaryCache[msg.program_id] = msg.summary || "";
+        delete state.pendingSummaryIds[msg.program_id];
+        if (state.selectedId === msg.program_id) {
+          scheduleRender(["inspector"]);
+        }
+        break;
+
+      case "image_data":
+        state.imageCache[msg.program_id] = msg.data_url || "";
+        if (state.selectedId === msg.program_id) {
+          scheduleRender(["inspector"]);
+        }
+        break;
+
+      case "summary_update":
+        state.summaryEnabled = !!msg.summary_enabled || state.summaryEnabled;
+        state.summaryGenerating = !!msg.summary_generating;
+        state.summaryText = msg.summary_text || "";
+        scheduleRender(["summary"]);
+        break;
+
+      case "feedback_ack":
+        state.hfEnabled = true;
+        state.hfActive = !!msg.feedback_active;
+        state.hfText = msg.feedback_text || "";
+        if (msg.human_feedback_mode) {
+          state.hfMode = msg.human_feedback_mode;
+        }
+        if (msg.error) {
+          showToast(msg.error, true);
+        } else {
+          showToast(state.hfActive ? "Feedback saved." : "Feedback cleared.");
+        }
+        scheduleRender(["feedback"]);
+        break;
+
+      case "human_feedback_mode_ack":
+        state.hfMode = msg.human_feedback_mode || state.hfMode;
+        scheduleRender(["feedback"]);
+        break;
+
+      case "system_prompt":
+        state.hfPrompt = msg.prompt_text || "";
+        scheduleRender(["feedback"]);
+        break;
+
+      case "human_feedback_history":
+        state.hfHistory = Array.isArray(msg.history) ? msg.history : [];
+        scheduleRender(["feedback"]);
+        break;
+
+      case "run_control_ack":
+        if (msg.control_capabilities) {
+          state.controlCapabilities = msg.control_capabilities;
+        }
+        if (msg.run_state) {
+          state.runState = msg.run_state;
+        }
+        showToast(msg.message || "Run control updated.", !msg.ok);
+        scheduleRender(["status"]);
+        break;
+
+      case "branch_ack":
+        if (msg.branch_capabilities) {
+          state.branchCapabilities = msg.branch_capabilities;
+        }
+        if (msg.ok) {
+          const sourceProgramId = msg.branch && msg.branch.source_program_id
+            ? String(msg.branch.source_program_id)
+            : (state.selectedId || "");
+          if (sourceProgramId) {
+            state.branchDrafts[sourceProgramId] = "";
+          }
+        }
+        showToast(msg.message || "Branch request updated.", !msg.ok);
+        if (state.selectedId) {
+          scheduleRender(["inspector"]);
+        }
+        break;
+
+      case "heartbeat":
+      case "run_state_update":
+        scheduleRender(["status"]);
+        break;
+    }
+  }
+
+  function syncEnvelope(msg) {
+    if (typeof msg.run_label === "string" && msg.run_label) {
+      state.runLabel = msg.run_label;
+    }
+    if (typeof msg.series_label === "string" && msg.series_label) {
+      state.seriesLabel = msg.series_label;
+    }
+    if (msg.run_state && typeof msg.run_state === "object") {
+      state.runState = msg.run_state;
+    }
+    if (typeof msg.last_event_at === "number") {
+      state.lastEventAt = msg.last_event_at;
+    }
+    if (msg.control_capabilities && typeof msg.control_capabilities === "object") {
+      state.controlCapabilities = msg.control_capabilities;
+    }
+    if (msg.branch_capabilities && typeof msg.branch_capabilities === "object") {
+      state.branchCapabilities = msg.branch_capabilities;
+    }
+  }
+
+  function normalizeProgram(program) {
+    const normalized = Object.assign({}, program);
+    normalized.metrics = normalized.metrics && typeof normalized.metrics === "object" ? normalized.metrics : {};
+    normalized.metadata = normalized.metadata && typeof normalized.metadata === "object" ? normalized.metadata : {};
+    normalized.iteration = toNumber(
+      normalized.iteration,
+      toNumber(normalized.iteration_found, 0)
+    );
+    normalized.id = String(normalized.id || "");
+    normalized.score = toNumber(
+      normalized.score,
+      toNumber(normalized.metrics && normalized.metrics.combined_score, 0)
+    );
+    normalized.context_ids = Array.isArray(normalized.context_ids)
+      ? normalized.context_ids
+      : (Array.isArray(normalized.other_context_ids) ? normalized.other_context_ids : []);
+    normalized.image_path = typeof normalized.image_path === "string" && normalized.image_path
+      ? normalized.image_path
+      : (typeof normalized.metadata.image_path === "string" && normalized.metadata.image_path
+        ? normalized.metadata.image_path
+        : (typeof normalized.metrics.image_path_stable === "string" ? normalized.metrics.image_path_stable : ""));
+    normalized.series_label = normalized.series_label || state.seriesLabel || "skydiscover";
+    normalized.run_label = normalized.run_label || state.runLabel || "live-run";
+    normalized.solution_snippet = typeof normalized.solution_snippet === "string" ? normalized.solution_snippet : "";
+    normalized.display_text = deriveDisplayText(normalized);
+    normalized.error_text = deriveErrorText(normalized);
+    return normalized;
+  }
+
+  function selectedNeedsInspectorRefresh(program) {
+    if (!program || !state.selectedId) {
+      return false;
+    }
+
+    if (program.id === state.selectedId) {
+      return true;
+    }
+
+    if (program.parent_id === state.selectedId) {
+      return true;
+    }
+
+    if ((program.context_ids || []).includes(state.selectedId)) {
+      return true;
+    }
+
+    const selected = getSelectedProgram();
+    if (!selected) {
+      return false;
+    }
+
+    if (selected.parent_id === program.id) {
+      return true;
+    }
+
+    return (selected.context_ids || []).includes(program.id);
+  }
+
+  function isProgramForActiveRun(program) {
+    if (!program || typeof program !== "object") {
+      return false;
+    }
+    const programRunLabel = typeof program.run_label === "string" && program.run_label
+      ? program.run_label
+      : "";
+    if (!programRunLabel || !state.runLabel) {
+      return true;
+    }
+    return programRunLabel === state.runLabel;
+  }
+
+  function deriveDisplayText(program) {
+    const metrics = program && program.metrics && typeof program.metrics === "object"
+      ? program.metrics
+      : {};
+    const candidates = [
+      program && program.display_text,
+      metrics.insight_text,
+      metrics.insight,
+      metrics.judge_conclusion,
+      metrics.judge_evidence,
+      metrics.summary,
+    ];
+
+    for (let i = 0; i < candidates.length; i += 1) {
+      const value = candidates[i];
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+    return "";
+  }
+
+  function deriveErrorText(program) {
+    if (program && typeof program.error_text === "string" && program.error_text.trim()) {
+      return program.error_text.trim();
+    }
+    const metrics = program && program.metrics && typeof program.metrics === "object"
+      ? program.metrics
+      : {};
+    for (const key of ["error", "error_message"]) {
+      if (typeof metrics[key] === "string" && metrics[key].trim()) {
+        return metrics[key].trim();
+      }
+    }
+    return "";
+  }
+
+  function rebuildProgramMap() {
+    state.programMap = {};
+    state.programs.forEach(function(program) {
+      state.programMap[program.id] = program;
+    });
+  }
+
+  function rebuildIndexes() {
+    state.childrenIndex = {};
+    state.contextUsedByIndex = {};
+    state.programs.forEach(addToIndexes);
+  }
+
+  function addToIndexes(program) {
+    if (program.parent_id) {
+      if (!state.childrenIndex[program.parent_id]) {
+        state.childrenIndex[program.parent_id] = [];
+      }
+      if (!state.childrenIndex[program.parent_id].includes(program.id)) {
+        state.childrenIndex[program.parent_id].push(program.id);
+      }
+    }
+    (program.context_ids || []).forEach(function(contextId) {
+      if (!state.contextUsedByIndex[contextId]) {
+        state.contextUsedByIndex[contextId] = [];
+      }
+      if (!state.contextUsedByIndex[contextId].includes(program.id)) {
+        state.contextUsedByIndex[contextId].push(program.id);
+      }
+    });
+  }
+
+  function ensureMetrics() {
+    const ordered = [];
+    const seen = new Set();
+
+    function pushMetric(key) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        ordered.push(key);
+      }
+    }
+
+    pushMetric("combined_score");
+    state.programs.forEach(function(program) {
+      Object.keys(program.metrics || {}).forEach(function(metricKey) {
+        const value = getMetricValue(program, metricKey);
+        if (Number.isFinite(value)) {
+          pushMetric(metricKey);
+        }
+      });
+    });
+
+    if (!ordered.length) {
+      ordered.push("combined_score");
+    }
+
+    state.availableMetrics = ordered;
+    if (!ordered.includes(state.metricKey)) {
+      state.metricKey = ordered[0];
+    }
+  }
+
+  function ensureSeriesVisibility() {
+    const seen = new Set();
+    state.programs.forEach(function(program) {
+      const key = getSeriesKey(program);
+      seen.add(key);
+      if (!(key in state.visibleSeries)) {
+        state.visibleSeries[key] = true;
+      }
+    });
+
+    if (!seen.size && !(state.seriesLabel in state.visibleSeries)) {
+      state.visibleSeries[state.seriesLabel] = true;
+      seen.add(state.seriesLabel);
+    }
+
+    Object.keys(state.visibleSeries).forEach(function(key) {
+      if (!seen.has(key)) {
+        delete state.visibleSeries[key];
+      }
+    });
+  }
+
+  function ensureSelectionVisible() {
+    if (!state.selectedId) {
+      return;
+    }
+    const selected = state.programMap[state.selectedId];
+    if (!selected) {
+      state.selectedId = null;
+      return;
+    }
+    const seriesKey = getSeriesKey(selected);
+    if (!state.visibleSeries[seriesKey]) {
+      state.selectedId = null;
+      return;
+    }
+  }
+
+  function renderAll() {
+    renderNow(["header", "seriesControls", "status", "plot", "inspector", "raw", "summary", "feedback"]);
+  }
+
+  function renderHeader() {
+    els.pageTitle.textContent = `VIS — ${state.seriesLabel} · ${state.runLabel}`;
+    renderMetricOptions();
+  }
+
+  function renderMetricOptions() {
+    const current = state.metricKey;
+    const html = state.availableMetrics
+      .map(function(metricKey) {
+        const selected = metricKey === current ? " selected" : "";
+        return `<option value="${escapeAttr(metricKey)}"${selected}>${escapeHtml(metricLabel(metricKey))}</option>`;
+      })
+      .join("");
+    if (state.lastMetricOptionsHtml === html) {
+      return;
+    }
+    state.lastMetricOptionsHtml = html;
+    els.metricSelect.innerHTML = html;
+  }
+
+  function renderSeriesControls() {
+    const series = Object.keys(state.visibleSeries);
+    if (!series.length) {
+      if (state.lastSeriesControlsHtml !== "") {
+        els.seriesControls.innerHTML = "";
+        state.lastSeriesControlsHtml = "";
+      }
+      return;
+    }
+    const html = series
+      .map(function(seriesKey) {
+        const active = !!state.visibleSeries[seriesKey];
+        const faded = !!state.hoveredSeries && state.hoveredSeries !== seriesKey;
+        return (
+          `<button class="series-chip" data-series="${escapeAttr(seriesKey)}" ` +
+          `data-active="${active}" data-faded="${faded}" ` +
+          `style="--series-color:${seriesColor(seriesKey)}" type="button">` +
+          `${escapeHtml(seriesKey)}` +
+          `</button>`
+        );
+      })
+      .join("");
+
+    if (state.lastSeriesControlsHtml === html) {
+      return;
+    }
+    state.lastSeriesControlsHtml = html;
+    els.seriesControls.innerHTML = html;
+
+    Array.from(els.seriesControls.querySelectorAll(".series-chip")).forEach(function(button) {
+      button.addEventListener("click", function() {
+        const seriesKey = button.getAttribute("data-series") || "";
+        state.visibleSeries[seriesKey] = !state.visibleSeries[seriesKey];
+        ensureSelectionVisible();
+        renderNow(["seriesControls", "plot", "inspector", "raw"]);
+      });
+      button.addEventListener("mouseenter", function() {
+        const seriesKey = button.getAttribute("data-series") || "";
+        if (seriesKey && state.hoveredSeries !== seriesKey) {
+          setHoveredSeries(seriesKey);
+        }
+      });
+      button.addEventListener("mouseleave", function() {
+        setHoveredSeries(null);
+      });
+    });
+  }
+
+  function renderStatus() {
+    els.connectionPill.className = `status-pill ${state.connectionState}`;
+    els.connectionPill.textContent = state.connectionState;
+
+    const runStatus = String((state.runState && state.runState.status) || inferRunStatus());
+    els.runStatusPill.className = `status-pill ${runStatus}`;
+    els.runStatusPill.textContent = runStatus;
+
+    const totalPrograms = Math.max(
+      state.programs.length,
+      toNumber((state.stats || {}).total_programs, state.programs.length)
+    );
+    const bestProgram = getBestProgram();
+    const bestScore = bestProgram ? getMetricValue(bestProgram, "combined_score") : NaN;
+    const remainingIterations = Object.prototype.hasOwnProperty.call(
+      state.runState || {},
+      "remaining_iterations"
+    )
+      ? state.runState.remaining_iterations
+      : null;
+    const runError = typeof (state.runState || {}).last_error === "string"
+      ? state.runState.last_error.trim()
+      : "";
+    const lastEventText = formatRelativeTimestamp(state.lastEventAt || state.runState.updated_at);
+    const checkpointText = shortCheckpointLabel(state.runState.checkpoint_path);
+
+    els.programCountChip.innerHTML = `programs <strong>${escapeHtml(String(totalPrograms))}</strong>`;
+    els.bestScoreChip.innerHTML = `best <strong>${Number.isFinite(bestScore) ? escapeHtml(formatNumber(bestScore)) : "--"}</strong>`;
+    els.remainingChip.innerHTML = `remaining <strong>${escapeHtml(formatRemainingIterations(remainingIterations, state.runState.max_iterations))}</strong>`;
+    els.lastEventChip.innerHTML = `last event <strong>${escapeHtml(lastEventText)}</strong>`;
+    els.checkpointChip.innerHTML = `checkpoint <strong>${escapeHtml(checkpointText)}</strong>`;
+    document.getElementById("run-chip").innerHTML = `run <strong>${escapeHtml(state.runLabel)}</strong>`;
+    document.getElementById("metric-chip").innerHTML = `metric <strong>${escapeHtml(metricLabel(state.metricKey))}</strong>`;
+    document.getElementById("freshness-chip").innerHTML = `updated <strong>${escapeHtml(formatRelativeTimestamp(state.runState.updated_at || state.lastEventAt))}</strong>`;
+    if (runStatus === "failed" && runError) {
+      els.hintNote.textContent = runError;
+      els.hintNote.className = "status-note error";
+      els.hintNote.title = runError;
+    } else {
+      els.hintNote.textContent = "click a point for details · hover a series to focus · double-click the plot to clear selection";
+      els.hintNote.className = "status-note";
+      els.hintNote.title = "";
+    }
+
+    els.stopButton.disabled = !state.controlCapabilities.stop;
+    els.stopButton.title = state.controlCapabilities.stop
+      ? "Request a graceful stop at the next safe checkpoint."
+      : "Stop is unavailable in this mode.";
+
+    els.startButton.disabled = !state.controlCapabilities.start;
+    els.startButton.title = state.controlCapabilities.start
+      ? "Start a new run."
+      : "Start-from-scratch is not wired in the embedded monitor yet.";
+    els.resumeButton.disabled = !state.controlCapabilities.resume;
+    els.resumeButton.title = state.controlCapabilities.resume
+      ? "Resume from the latest saved checkpoint."
+      : "Resume becomes available after a monitor-triggered pause.";
+  }
+
+  function renderPlot() {
+    const visibilityKey = Object.keys(state.visibleSeries)
+      .sort()
+      .map(function(seriesKey) {
+        return `${seriesKey}:${state.visibleSeries[seriesKey] ? 1 : 0}`;
+      })
+      .join("|");
+    const plotKey = [
+      state.plotDataVersion,
+      state.metricKey,
+      state.selectedId || "",
+      state.hoveredSeries || "",
+      visibilityKey,
+    ].join("::");
+    if (state.lastRenderedPlotKey === plotKey) {
+      return;
+    }
+    state.lastRenderedPlotKey = plotKey;
+
+    const pointLayout = buildDisplayPositionMap(state.metricKey);
+    const traces = [];
+    const annotations = buildLineageAnnotations(pointLayout);
+    const seriesKeys = Object.keys(state.visibleSeries).filter(function(seriesKey) {
+      return state.visibleSeries[seriesKey];
+    });
+
+    seriesKeys.forEach(function(seriesKey) {
+      const points = getProgramsForSeries(seriesKey)
+        .filter(function(program) {
+          return Number.isFinite(getMetricValue(program, state.metricKey));
+        })
+        .sort(function(a, b) {
+          return a.iteration - b.iteration;
+        });
+
+      if (!points.length) {
+        return;
+      }
+
+      const trajectory = computeBestTrajectory(points);
+      const dimmed = !!state.hoveredSeries && state.hoveredSeries !== seriesKey;
+      const color = seriesColor(seriesKey);
+
+      traces.push({
+        x: points.map(function(program) { return getDisplayPosition(program, pointLayout, state.metricKey).x; }),
+        y: points.map(function(program) { return getDisplayPosition(program, pointLayout, state.metricKey).y; }),
+        customdata: points.map(function(program) { return [program.id, seriesKey]; }),
+        text: points.map(buildHoverText),
+        hovertemplate: "%{text}<extra></extra>",
+        mode: "markers",
+        type: "scatter",
+        name: seriesKey,
+        meta: { seriesKey: seriesKey, role: "all_points" },
+        marker: {
+          color: color,
+          size: 7,
+          opacity: dimmed ? 0.09 : 0.24,
+          line: {
+            width: 0.8,
+            color: "rgba(30, 36, 46, 0.16)",
+          },
+        },
+        showlegend: false,
+      });
+
+      traces.push({
+        x: trajectory.x,
+        y: trajectory.y,
+        mode: "lines",
+        type: "scatter",
+        name: seriesKey,
+        meta: { seriesKey: seriesKey, role: "best_line" },
+        line: {
+          color: color,
+          width: dimmed ? 1.2 : 3.1,
+          dash: "dot",
+          shape: "hv",
+        },
+        opacity: dimmed ? 0.16 : 0.98,
+        hoverinfo: "skip",
+        showlegend: true,
+      });
+
+      traces.push({
+        x: trajectory.newBest.map(function(program) {
+          return getDisplayPosition(program, pointLayout, state.metricKey).x;
+        }),
+        y: trajectory.newBest.map(function(program) {
+          return getDisplayPosition(program, pointLayout, state.metricKey).y;
+        }),
+        customdata: trajectory.newBest.map(function(program) { return [program.id, seriesKey]; }),
+        text: trajectory.newBest.map(buildHoverText),
+        hovertemplate: "%{text}<extra></extra>",
+        mode: "markers",
+        type: "scatter",
+        name: `${seriesKey} new best`,
+        meta: { seriesKey: seriesKey, role: "new_best" },
+        marker: {
+          color: color,
+          size: dimmed ? 8 : 10,
+          symbol: "diamond",
+          opacity: dimmed ? 0.2 : 1,
+          line: {
+            width: 1.4,
+            color: "rgba(255,255,255,0.95)",
+          },
+        },
+        showlegend: false,
+      });
+    });
+
+    const selected = getSelectedProgram();
+    if (selected && Number.isFinite(getMetricValue(selected, state.metricKey)) && state.visibleSeries[getSeriesKey(selected)]) {
+      const selectedDisplay = getDisplayPosition(selected, pointLayout, state.metricKey);
+      traces.push({
+        x: [selectedDisplay.x],
+        y: [selectedDisplay.y],
+        mode: "markers",
+        type: "scatter",
+        hoverinfo: "skip",
+        showlegend: false,
+        marker: {
+          size: 20,
+          color: "rgba(255,255,255,0)",
+          symbol: "circle-open",
+          line: {
+            width: 3,
+            color: "#1e2430",
+          },
+        },
+      });
+    }
+
+    const layout = {
+      paper_bgcolor: "rgba(0,0,0,0)",
+      plot_bgcolor: "#ffffff",
+      margin: { t: 18, r: 20, b: 66, l: 76 },
+      font: {
+        family: '"Avenir Next", "Segoe UI", sans-serif',
+        color: "#2a2d33",
+        size: 12,
+      },
+      xaxis: {
+        title: { text: "iteration", standoff: 10 },
+        gridcolor: "rgba(34, 36, 41, 0.08)",
+        zeroline: false,
+        linecolor: "rgba(34, 36, 41, 0.12)",
+        tickcolor: "rgba(34, 36, 41, 0.12)",
+      },
+      yaxis: {
+        title: { text: metricLabel(state.metricKey), standoff: 8 },
+        gridcolor: "rgba(34, 36, 41, 0.08)",
+        zeroline: false,
+        linecolor: "rgba(34, 36, 41, 0.12)",
+        tickcolor: "rgba(34, 36, 41, 0.12)",
+      },
+      hovermode: "closest",
+      dragmode: "pan",
+      legend: {
+        x: 0.02,
+        y: 0.98,
+        xanchor: "left",
+        yanchor: "top",
+        bgcolor: "rgba(255,255,255,0.92)",
+        bordercolor: "rgba(36, 39, 48, 0.12)",
+        borderwidth: 1,
+        font: {
+          size: 12,
+          color: "#2a2d33",
+        },
+      },
+      annotations: annotations,
+    };
+
+    if (!traces.length) {
+      layout.annotations = layout.annotations.concat([
+        {
+          text: "Waiting for candidate data",
+          xref: "paper",
+          yref: "paper",
+          x: 0.5,
+          y: 0.52,
+          showarrow: false,
+          font: {
+            size: 16,
+            color: "#636973",
+          },
+        },
+      ]);
+    }
+
+    Plotly.react(els.plot, traces, layout, {
+      responsive: true,
+      displaylogo: false,
+      modeBarButtonsToRemove: ["lasso2d", "select2d", "autoScale2d"],
+    });
+
+    bindPlotEvents();
+  }
+
+  function bindPlotEvents() {
+    if (state.plotBound) {
+      return;
+    }
+    state.plotBound = true;
+
+    els.plot.on("plotly_click", function(eventData) {
+      const point = resolveInteractivePlotPoint(eventData);
+      if (!point) {
+        return;
+      }
+      const programId = point.customdata[0];
+      if (programId && state.programMap[programId]) {
+        state.selectedId = programId;
+        renderNow(["plot", "inspector", "raw"]);
+        primeSelectedProgram();
+      }
+    });
+
+    els.plot.on("plotly_hover", function(eventData) {
+      const point = resolveInteractivePlotPoint(eventData);
+      if (!point) {
+        return;
+      }
+      const seriesKey = point.customdata && point.customdata[1] ? point.customdata[1] : null;
+      if (seriesKey && state.hoveredSeries !== seriesKey) {
+        setHoveredSeries(seriesKey);
+      }
+    });
+
+    els.plot.on("plotly_unhover", function() {
+      setHoveredSeries(null);
+    });
+
+    els.plot.on("plotly_doubleclick", function() {
+      clearSelection();
+      return false;
+    });
+  }
+
+  function resolveInteractivePlotPoint(eventData) {
+    const points = eventData && Array.isArray(eventData.points) ? eventData.points : [];
+    if (!points.length) {
+      return null;
+    }
+
+    for (let i = 0; i < points.length; i += 1) {
+      const point = points[i];
+      const customdata = point && point.customdata;
+      if (!Array.isArray(customdata) || !customdata.length) {
+        continue;
+      }
+      const programId = customdata[0];
+      if (programId && state.programMap[programId]) {
+        return point;
+      }
+    }
+
+    return null;
+  }
+
+  function buildLineageAnnotations(pointLayout) {
+    const selected = getSelectedProgram();
+    if (!selected) {
+      return [];
+    }
+
+    const annotations = [];
+    const selectedMetric = getMetricValue(selected, state.metricKey);
+    if (!Number.isFinite(selectedMetric)) {
+      return annotations;
+    }
+
+    function maybeAddArrow(fromProgram, toProgram, color, width, opacity) {
+      if (!fromProgram || !toProgram) {
+        return;
+      }
+      const fromMetric = getMetricValue(fromProgram, state.metricKey);
+      const toMetric = getMetricValue(toProgram, state.metricKey);
+      if (!Number.isFinite(fromMetric) || !Number.isFinite(toMetric)) {
+        return;
+      }
+      if (!state.visibleSeries[getSeriesKey(fromProgram)] || !state.visibleSeries[getSeriesKey(toProgram)]) {
+        return;
+      }
+      const fromDisplay = getDisplayPosition(fromProgram, pointLayout, state.metricKey);
+      const toDisplay = getDisplayPosition(toProgram, pointLayout, state.metricKey);
+      annotations.push({
+        x: toDisplay.x,
+        y: toDisplay.y,
+        ax: fromDisplay.x,
+        ay: fromDisplay.y,
+        xref: "x",
+        yref: "y",
+        axref: "x",
+        ayref: "y",
+        showarrow: true,
+        arrowhead: 3,
+        arrowsize: 1.2,
+        arrowwidth: width,
+        arrowcolor: color,
+        opacity: opacity,
+      });
+    }
+
+    if (selected.parent_id && state.programMap[selected.parent_id]) {
+      maybeAddArrow(state.programMap[selected.parent_id], selected, "#d85a5a", 2.4, 0.9);
+    }
+
+    (selected.context_ids || []).forEach(function(contextId) {
+      if (state.programMap[contextId]) {
+        maybeAddArrow(state.programMap[contextId], selected, "#7a68e0", 2, 0.75);
+      }
+    });
+
+    (state.childrenIndex[selected.id] || []).forEach(function(childId) {
+      if (state.programMap[childId]) {
+        maybeAddArrow(selected, state.programMap[childId], "#2e8b57", 2, 0.68);
+      }
+    });
+
+    (state.contextUsedByIndex[selected.id] || []).forEach(function(programId) {
+      if (state.programMap[programId]) {
+        maybeAddArrow(selected, state.programMap[programId], "#4b79b9", 1.6, 0.58);
+      }
+    });
+
+    return annotations;
+  }
+
+  function renderInspector() {
+    const selected = getSelectedProgram();
+    if (!selected) {
+      els.selectedSeriesBadge.textContent = "No selection";
+      els.selectedSeriesBadge.style.setProperty("--badge-color", "#636973");
+      const emptyHtml = "Select a candidate to inspect its score, lineage, artifact preview, and generated insight.";
+      if (state.lastInspectorHtml !== emptyHtml || els.inspectorMain.className !== "inspector-empty") {
+        state.lastInspectorHtml = emptyHtml;
+        els.inspectorMain.className = "inspector-empty";
+        els.inspectorMain.innerHTML = emptyHtml;
+      }
+      return;
+    }
+
+    const seriesKey = getSeriesKey(selected);
+    const badgeColor = seriesColor(seriesKey);
+    const metricValue = getMetricValue(selected, state.metricKey);
+    const bestValue = getMetricValue(selected, "combined_score");
+    const children = state.childrenIndex[selected.id] || [];
+    const usedBy = state.contextUsedByIndex[selected.id] || [];
+    const narrativeHtml = buildNarrativeHtml(selected);
+    const previewHtml = buildPreviewHtml(selected);
+    const branchComposerHtml = buildBranchComposerHtml(selected);
+    const detailsHtml = buildCandidateDetailsHtml(selected, metricValue, bestValue, children, usedBy);
+    const errorHtml = selected.error_text
+      ? `<div class="alert-box">${escapeHtml(selected.error_text)}</div>`
+      : "";
+
+    els.selectedSeriesBadge.textContent = seriesKey;
+    els.selectedSeriesBadge.style.setProperty("--badge-color", badgeColor);
+    const inspectorHtml = `
+      ${detailsHtml}
+      ${previewHtml}
+      ${errorHtml}
+
+      <div class="content-card">
+        <div class="narrative-title">Insight</div>
+        <div class="narrative-body">${narrativeHtml}</div>
+      </div>
+
+      ${branchComposerHtml}
+    `;
+    if (state.lastInspectorHtml === inspectorHtml && els.inspectorMain.className === "") {
+      return;
+    }
+    state.lastInspectorHtml = inspectorHtml;
+    els.inspectorMain.className = "";
+    els.inspectorMain.innerHTML = inspectorHtml;
+
+    Array.from(els.inspectorMain.querySelectorAll("[data-program-id]")).forEach(function(button) {
+      button.addEventListener("click", function() {
+        const programId = button.getAttribute("data-program-id") || "";
+        if (programId && state.programMap[programId]) {
+          state.selectedId = programId;
+          renderNow(["plot", "inspector", "raw"]);
+          primeSelectedProgram();
+        }
+      });
+    });
+
+    const branchInput = els.inspectorMain.querySelector("[data-branch-input]");
+    if (branchInput) {
+      branchInput.addEventListener("input", function() {
+        state.branchDrafts[selected.id] = branchInput.value;
+      });
+    }
+
+    const branchStartButton = els.inspectorMain.querySelector("[data-branch-start]");
+    if (branchStartButton) {
+      branchStartButton.addEventListener("click", function() {
+        if (!(state.branchCapabilities && state.branchCapabilities.create)) {
+          return;
+        }
+
+        const currentSelected = getSelectedProgram();
+        if (!currentSelected || currentSelected.id !== selected.id) {
+          return;
+        }
+
+        const cached = state.solutionCache[currentSelected.id];
+        const solution = cached && typeof cached.solution === "string" ? cached.solution : "";
+        if (!solution.trim()) {
+          send({
+            type: "request_program_solution",
+            program_id: currentSelected.id,
+            branch_id: currentSelected.branch_id || "",
+          });
+          showToast("The full candidate solution is still loading. Try again in a moment.", true);
+          scheduleRender(["inspector"]);
+          return;
+        }
+
+        const feedbackText = state.branchDrafts[currentSelected.id] || "";
+        if (send({
+          type: "request_branch_from_program",
+          program: currentSelected,
+          program_id: currentSelected.id,
+          solution: solution,
+          feedback_text: feedbackText,
+          anchor_iteration: currentSelected.iteration,
+          source_run_label: state.runLabel,
+          source_series_label: getSeriesKey(currentSelected),
+        })) {
+          showToast("Starting candidate-seeded branch...");
+        }
+      });
+    }
+  }
+
+  function buildPreviewHtml(selected) {
+    const hasImage = !!selected.image_path;
+    let previewBody = `<div class="preview-empty">No artifact preview is available for this candidate.</div>`;
+
+    if (hasImage) {
+      const imageData = state.imageCache[selected.id];
+      if (imageData) {
+        previewBody = `<img src="${imageData}" alt="Candidate preview">`;
+      } else {
+        previewBody = `<div class="preview-empty">Loading artifact preview...</div>`;
+      }
+    }
+
+    return `
+      <div class="preview-card">
+        <div class="preview-header">
+          <div class="preview-title">Artifact Preview</div>
+          <div class="status-note">${hasImage ? "image-backed candidate" : "no preview artifact"}</div>
+        </div>
+        <div class="preview-body">${previewBody}</div>
+      </div>
+    `;
+  }
+
+  function buildNarrativeHtml(selected) {
+    const displayText = deriveDisplayText(selected);
+    if (displayText) {
+      return renderRichText(displayText);
+    }
+
+    const summaryText = state.summaryCache[selected.id];
+    if (summaryText) {
+      return renderRichText(summaryText);
+    }
+
+    const snippet = selected.solution_snippet || "";
+    if (snippet) {
+      return `
+        <p>No generated insight has been stored for this candidate yet.</p>
+        <p><code>solution_snippet</code> is shown as a fallback below.</p>
+        <pre class="code-view" style="margin-top:12px;">${escapeHtml(snippet)}</pre>
+      `;
+    }
+
+    return "<p>No generated insight is available for this candidate yet.</p>";
+  }
+
+  function renderTagRow(label, ids, variant, options) {
+    const cleaned = Array.isArray(ids) ? ids.filter(Boolean) : [];
+    const limit = options && Number.isFinite(options.limit) ? options.limit : cleaned.length;
+    const visible = cleaned.slice(0, Math.max(0, limit));
+    const hiddenCount = Math.max(0, cleaned.length - visible.length);
+    let inner = "";
+
+    if (cleaned.length) {
+      inner = visible.map(function(id) {
+          const shortId = String(id).slice(0, 8);
+          const clickable = !!state.programMap[id];
+          const extraClass = clickable ? variant : `${variant} inactive`;
+          const attr = clickable ? ` data-program-id="${escapeAttr(String(id))}"` : "";
+          return `<button class="tag-chip ${extraClass}" type="button"${attr}>${escapeHtml(shortId)}</button>`;
+        }).join("");
+      if (hiddenCount > 0) {
+        inner += `<span class="tag-overflow">+${escapeHtml(String(hiddenCount))} more</span>`;
+      }
+    } else {
+      inner = `<span class="tag-chip inactive" style="cursor:default;">none</span>`;
+    }
+
+    return `
+      <div class="tag-row">
+        <div class="tag-label">${escapeHtml(label)}:</div>
+        <div class="tag-list">${inner}</div>
+      </div>
+    `;
+  }
+
+  function renderRawSolution() {
+    const selected = getSelectedProgram();
+    if (!selected) {
+      const emptyIndicator = "select a candidate";
+      const emptyBody = "Select a candidate to inspect its solution.";
+      if (state.lastRawIndicatorText !== emptyIndicator) {
+        state.lastRawIndicatorText = emptyIndicator;
+        els.rawIndicator.textContent = emptyIndicator;
+      }
+      if (state.lastRawBodyText !== emptyBody) {
+        state.lastRawBodyText = emptyBody;
+        els.rawSolutionView.textContent = emptyBody;
+      }
+      syncCodeTabButtons();
+      return;
+    }
+
+    const indicatorText = `${selected.id.slice(0, 8)} · ${state.activeCodeTab}`;
+    const cached = state.solutionCache[selected.id];
+    if (!cached) {
+      if (state.lastRawIndicatorText !== indicatorText) {
+        state.lastRawIndicatorText = indicatorText;
+        els.rawIndicator.textContent = indicatorText;
+      }
+      if (state.lastRawBodyText !== "Loading solution text...") {
+        state.lastRawBodyText = "Loading solution text...";
+        els.rawSolutionView.textContent = "Loading solution text...";
+      }
+      syncCodeTabButtons();
+      return;
+    }
+
+    const text = state.activeCodeTab === "parent" ? cached.parent_solution : cached.solution;
+    const nextBodyText = text || "No solution text available for this view.";
+    if (state.lastRawIndicatorText !== indicatorText) {
+      state.lastRawIndicatorText = indicatorText;
+      els.rawIndicator.textContent = indicatorText;
+    }
+    if (state.lastRawBodyText !== nextBodyText) {
+      state.lastRawBodyText = nextBodyText;
+      els.rawSolutionView.textContent = nextBodyText;
+    }
+    syncCodeTabButtons();
+  }
+
+  function syncCodeTabButtons() {
+    els.codeTabCurrent.classList.toggle("active", state.activeCodeTab === "current");
+    els.codeTabParent.classList.toggle("active", state.activeCodeTab === "parent");
+  }
+
+  function renderSummaryPanel() {
+    els.summaryRefreshButton.disabled = !state.summaryEnabled || state.summaryGenerating;
+    els.summaryIndicator.textContent = state.summaryGenerating
+      ? "refreshing"
+      : (state.summaryEnabled ? "manual refresh" : "disabled");
+    els.summaryStatus.textContent = state.summaryEnabled
+      ? (state.summaryGenerating ? "Generating updated summary..." : "Summary refresh is manual in this view.")
+      : "AI summary is not configured for this monitor.";
+
+    if (state.summaryText) {
+      els.summaryBody.innerHTML = renderRichText(state.summaryText);
+    } else if (state.summaryGenerating) {
+      els.summaryBody.innerHTML = "<p>Generating summary...</p>";
+    } else {
+      els.summaryBody.innerHTML = "<p>No global summary yet.</p>";
+    }
+  }
+
+  function renderFeedbackPanel() {
+    els.feedbackIndicator.textContent = state.hfEnabled
+      ? (state.hfActive ? "active" : "inactive")
+      : "disabled";
+
+    els.hfInput.disabled = !state.hfEnabled;
+    els.hfSendButton.disabled = !state.hfEnabled;
+    els.hfClearButton.disabled = !state.hfEnabled;
+    els.hfModeAppend.disabled = !state.hfEnabled;
+    els.hfModeReplace.disabled = !state.hfEnabled;
+
+    els.hfModeAppend.classList.toggle("active", state.hfMode === "append");
+    els.hfModeReplace.classList.toggle("active", state.hfMode === "replace");
+    els.hfModeCaption.textContent = state.hfMode === "replace"
+      ? "Replace mode overrides the system prompt for future iterations."
+      : "Append mode adds your text after the system prompt.";
+
+    els.hfStatus.className = "hf-status";
+    if (!state.hfEnabled) {
+      els.hfStatus.classList.add("disabled");
+      els.hfStatus.textContent = "Human feedback is not enabled for this run.";
+    } else if (state.hfActive) {
+      els.hfStatus.classList.add("active");
+      els.hfStatus.textContent = "Human feedback is active.";
+    } else {
+      els.hfStatus.textContent = "Human feedback is enabled but currently empty.";
+    }
+
+    if (document.activeElement !== els.hfInput) {
+      els.hfInput.value = state.hfText || "";
+    }
+
+    els.hfPromptBody.innerHTML = state.hfPrompt
+      ? escapeHtml(state.hfPrompt)
+      : '<div class="mini-empty">Prompt text will appear here when available.</div>';
+
+    if (!state.hfHistory.length) {
+      els.hfHistoryBody.innerHTML = '<div class="mini-empty">No feedback history yet.</div>';
+      return;
+    }
+
+    els.hfHistoryBody.innerHTML = state.hfHistory
+      .slice()
+      .reverse()
+      .slice(0, 8)
+      .map(function(entry) {
+        const iter = entry && entry.iteration != null ? `iter ${entry.iteration}` : "iteration unknown";
+        const mode = entry && entry.mode ? String(entry.mode) : "append";
+        const feedbackText = entry && entry.feedback ? String(entry.feedback) : "";
+        return `
+          <div class="history-item">
+            <div class="history-meta">
+              <span>${escapeHtml(iter)}</span>
+              <span class="history-mode">${escapeHtml(mode)}</span>
+            </div>
+            <div class="history-text">${escapeHtml(feedbackText || "(empty)")}</div>
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  function buildBranchComposerHtml(selected) {
+    const canCreate = !!(state.branchCapabilities && state.branchCapabilities.create);
+    const cached = selected ? state.solutionCache[selected.id] : null;
+    const hasFullSolution = !!(
+      cached &&
+      typeof cached.solution === "string" &&
+      cached.solution.trim()
+    );
+    const draftText = selected && typeof state.branchDrafts[selected.id] === "string"
+      ? state.branchDrafts[selected.id]
+      : "";
+
+    let indicator = "disabled";
+    let statusText = "Candidate-guided branching is only available in launcher mode.";
+    let sourceHtml = '<div class="mini-empty">Select a candidate to seed a new branch.</div>';
+    let captionText = "Open the standalone launcher to create live side branches from selected candidates.";
+
+    if (canCreate && selected) {
+      indicator = hasFullSolution ? "ready" : "loading";
+      statusText = hasFullSolution
+        ? "Write your expert feedback while looking at the artifact and insight, then start a new branch from this candidate."
+        : "Loading the full candidate solution before branch creation.";
+      sourceHtml = `
+        <div><strong>${escapeHtml(getSeriesKey(selected))}</strong> · iter ${escapeHtml(String(selected.iteration))} · score ${escapeHtml(formatNumber(getMetricValue(selected, "combined_score")))}</div>
+        <div class="branch-source-subtle">${escapeHtml(selected.run_label || state.runLabel)} · id ${escapeHtml(String(selected.id).slice(0, 8))}</div>
+        ${
+          selected.branch_id
+            ? `<div style="margin-top:6px;">branch step ${escapeHtml(String(selected.branch_local_iteration || 0))} from ${escapeHtml(String((selected.branch_source_program_id || "").slice(0, 8)))}</div>`
+            : ""
+        }
+      `;
+      captionText = hasFullSolution
+        ? "This branch will stay on the same chart and grow forward from the selected candidate."
+        : "Keep this area open for a moment while the full candidate solution loads.";
+    } else if (selected) {
+      indicator = "disabled";
+      statusText = "Candidate-guided branching is not enabled in this monitor mode.";
+      sourceHtml = `
+        <div><strong>${escapeHtml(getSeriesKey(selected))}</strong> · iter ${escapeHtml(String(selected.iteration))}</div>
+        <div class="branch-source-subtle">${escapeHtml(selected.run_label || state.runLabel)} · id ${escapeHtml(String(selected.id).slice(0, 8))}</div>
+      `;
+    }
+
+    return `
+      <div class="branch-composer-card">
+        <div class="branch-composer-header">
+          <div class="branch-composer-copy">
+            <div class="preview-title">Candidate Feedback &amp; Branch</div>
+            <div class="summary-status">${escapeHtml(statusText)}</div>
+          </div>
+          <div class="status-pill ${escapeAttr(indicator)}">${escapeHtml(indicator)}</div>
+        </div>
+        <div class="branch-composer-body">
+          <div class="branch-source-summary">${sourceHtml}</div>
+          <textarea
+            class="hf-textarea branch-composer-input"
+            data-branch-input="true"
+            placeholder="What is weak here? What seems promising? What should the next branch try?"
+            ${(!canCreate || !selected) ? "disabled" : ""}
+          >${escapeHtml(draftText)}</textarea>
+          <div class="action-row">
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button
+                class="inline-btn primary"
+                type="button"
+                data-branch-start="true"
+                ${(!canCreate || !selected || !hasFullSolution) ? "disabled" : ""}
+              >Start branch</button>
+            </div>
+            <div class="summary-status">${escapeHtml(captionText)}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function buildCandidateDetailsHtml(selected, metricValue, bestValue, children, usedBy) {
+    const shortId = String(selected.id || "").slice(0, 8);
+    const detailChips = [];
+    if (selected.label_type && String(selected.label_type).toLowerCase() !== "unknown") {
+      detailChips.push(`<span class="meta-chip">label <strong>${escapeHtml(String(selected.label_type))}</strong></span>`);
+    }
+    if (selected.island != null) {
+      detailChips.push(`<span class="meta-chip">island <strong>${escapeHtml(String(selected.island))}</strong></span>`);
+    }
+    if (selected.generation != null) {
+      detailChips.push(`<span class="meta-chip">generation <strong>${escapeHtml(String(selected.generation))}</strong></span>`);
+    }
+
+    const lineageRows = [
+      selected.parent_id ? renderTagRow("parent", [selected.parent_id], "parent") : "",
+      (selected.context_ids || []).length ? renderTagRow("context", selected.context_ids, "context", { limit: 12 }) : "",
+      children.length ? renderTagRow("children", children, "child", { limit: 24 }) : "",
+      usedBy.length ? renderTagRow("used as context by", usedBy, "usage", { limit: 24 }) : "",
+    ].filter(Boolean).join("");
+
+    return `
+      <div class="candidate-details-block">
+        <div class="meta-stack">
+          <div class="meta-line">
+            <div class="meta-key">run:</div>
+            <div class="meta-value mono">${escapeHtml(selected.run_label || state.runLabel)}</div>
+          </div>
+          <div class="meta-line">
+            <div class="meta-key">iteration:</div>
+            <div class="meta-value">${escapeHtml(String(selected.iteration))}</div>
+          </div>
+          <div class="meta-line">
+            <div class="meta-key">${escapeHtml(metricLabel(state.metricKey).toLowerCase())}:</div>
+            <div class="meta-value score">${Number.isFinite(metricValue) ? escapeHtml(formatNumber(metricValue)) : "--"}</div>
+          </div>
+          <div class="meta-line">
+            <div class="meta-key">id:</div>
+            <div class="meta-value mono" title="${escapeAttr(selected.id)}">${escapeHtml(shortId || selected.id)}</div>
+          </div>
+          ${
+            selected.branch_id
+              ? `
+          <div class="meta-line">
+            <div class="meta-key">branch step:</div>
+            <div class="meta-value">step ${escapeHtml(String(selected.branch_local_iteration || 0))} from ${escapeHtml(String((selected.branch_source_program_id || "").slice(0, 8)))}</div>
+          </div>
+          `
+              : ""
+          }
+          ${
+            state.metricKey !== "combined_score" && Number.isFinite(bestValue)
+              ? `
+          <div class="meta-line">
+            <div class="meta-key">combined:</div>
+            <div class="meta-value">${escapeHtml(formatNumber(bestValue))}</div>
+          </div>
+          `
+              : ""
+          }
+        </div>
+        ${
+          detailChips.length
+            ? `<div class="secondary-row">${detailChips.join("")}</div>`
+            : ""
+        }
+        ${
+          lineageRows
+            ? `<div class="tag-group">${lineageRows}</div>`
+            : ""
+        }
+      </div>
+    `;
+  }
+
+  function primeSelectedProgram() {
+    const selected = getSelectedProgram();
+    if (!selected) {
+      return;
+    }
+
+    if (selected.image_path && !state.imageCache[selected.id]) {
+      send({
+        type: "request_image",
+        image_path: selected.image_path,
+        program_id: selected.id,
+      });
+    }
+
+    if (!state.solutionCache[selected.id]) {
+      send({
+        type: "request_program_solution",
+        program_id: selected.id,
+        branch_id: selected.branch_id || "",
+      });
+    }
+
+    if (!deriveDisplayText(selected) && !state.summaryCache[selected.id] && !state.pendingSummaryIds[selected.id]) {
+      state.pendingSummaryIds[selected.id] = true;
+      send({
+        type: "request_program_summary",
+        program_id: selected.id,
+        branch_id: selected.branch_id || "",
+      });
+    }
+  }
+
+  function maybePrimeFeedbackData() {
+    if (state.feedbackPanelPrimed) {
+      return;
+    }
+    state.feedbackPanelPrimed = true;
+    send({ type: "request_feedback_state" });
+    send({ type: "request_system_prompt" });
+    send({ type: "request_human_feedback_history" });
+  }
+
+  function getProgramsForSeries(seriesKey) {
+    return state.programs.filter(function(program) {
+      return getSeriesKey(program) === seriesKey;
+    });
+  }
+
+  function buildDisplayPositionMap(metricKey) {
+    const grouped = {};
+    const positions = {};
+
+    state.programs.forEach(function(program) {
+      const metricValue = getMetricValue(program, metricKey);
+      const iteration = toNumber(program && program.iteration, NaN);
+      if (!Number.isFinite(metricValue) || !Number.isFinite(iteration)) {
+        return;
+      }
+      // Keep the visual offset stable for exact overlaps without changing the
+      // underlying iteration / metric values shown in tooltips and the side panel.
+      const key = `${iteration}|${stableMetricKey(metricValue)}`;
+      if (!grouped[key]) {
+        grouped[key] = [];
+      }
+      grouped[key].push(program);
+    });
+
+    Object.keys(grouped).forEach(function(key) {
+      const programs = grouped[key]
+        .slice()
+        .sort(function(left, right) {
+          return String(left.id || "").localeCompare(String(right.id || ""));
+        });
+
+      programs.forEach(function(program, index) {
+        positions[program.id] = {
+          x: program.iteration + centeredOffset(index, programs.length),
+          y: getMetricValue(program, metricKey),
+        };
+      });
+    });
+
+    return positions;
+  }
+
+  function getDisplayPosition(program, pointLayout, metricKey) {
+    if (!program) {
+      return { x: NaN, y: NaN };
+    }
+    if (pointLayout && pointLayout[program.id]) {
+      return pointLayout[program.id];
+    }
+    return {
+      x: toNumber(program.iteration, NaN),
+      y: getMetricValue(program, metricKey),
+    };
+  }
+
+  function centeredOffset(index, count) {
+    if (!Number.isFinite(index) || !Number.isFinite(count) || count <= 1) {
+      return 0;
+    }
+    const step = 0.075;
+    return (index - (count - 1) / 2) * step;
+  }
+
+  function stableMetricKey(value) {
+    if (!Number.isFinite(value)) {
+      return "nan";
+    }
+    return Number(value).toPrecision(12);
+  }
+
+  function getSeriesKey(program) {
+    return program.series_label || state.seriesLabel || "skydiscover";
+  }
+
+  function computeBestTrajectory(points) {
+    const x = [];
+    const y = [];
+    const newBest = [];
+    let best = -Infinity;
+
+    points.forEach(function(program) {
+      const value = getMetricValue(program, state.metricKey);
+      if (!Number.isFinite(value)) {
+        return;
+      }
+      if (value > best) {
+        best = value;
+        newBest.push(program);
+      }
+      x.push(program.iteration);
+      y.push(best);
+    });
+
+    return { x: x, y: y, newBest: newBest };
+  }
+
+  function buildHoverText(program) {
+    const parts = [
+      `${escapeHtml(getSeriesKey(program))}`,
+      `iter ${program.iteration}`,
+      `${metricLabel(state.metricKey)} ${formatNumber(getMetricValue(program, state.metricKey))}`,
+      `id ${program.id.slice(0, 8)}`,
+    ];
+    if (program.parent_id && state.programMap[program.parent_id]) {
+      const parentMetric = getMetricValue(state.programMap[program.parent_id], state.metricKey);
+      const currentMetric = getMetricValue(program, state.metricKey);
+      if (Number.isFinite(parentMetric) && Number.isFinite(currentMetric)) {
+        const delta = currentMetric - parentMetric;
+        parts.push(`delta ${delta >= 0 ? "+" : ""}${formatNumber(delta)}`);
+      }
+    }
+    if (program.branch_id) {
+      parts.push(`branch step ${program.branch_local_iteration || 0}`);
+    }
+    return parts.join("<br>");
+  }
+
+  function getMetricValue(program, metricKey) {
+    if (!program) {
+      return NaN;
+    }
+    if (metricKey === "combined_score") {
+      const metricValue = toNumber(program.metrics && program.metrics.combined_score, NaN);
+      if (Number.isFinite(metricValue)) {
+        return metricValue;
+      }
+      return toNumber(program.score, NaN);
+    }
+    if (metricKey === "score") {
+      return toNumber(program.score, NaN);
+    }
+    return toNumber(program.metrics && program.metrics[metricKey], NaN);
+  }
+
+  function getBestProgram() {
+    if (state.bestProgramId && state.programMap[state.bestProgramId]) {
+      return state.programMap[state.bestProgramId];
+    }
+    if (!state.programs.length) {
+      return null;
+    }
+    let bestProgram = null;
+    let bestScore = -Infinity;
+    state.programs.forEach(function(program) {
+      const score = getMetricValue(program, "combined_score");
+      if (Number.isFinite(score) && score > bestScore) {
+        bestScore = score;
+        bestProgram = program;
+      }
+    });
+    return bestProgram;
+  }
+
+  function getSelectedProgram() {
+    return state.selectedId ? state.programMap[state.selectedId] || null : null;
+  }
+
+  function compareScores(leftId, rightId) {
+    const left = state.programMap[leftId];
+    const right = state.programMap[rightId];
+    return getMetricValue(left, "combined_score") - getMetricValue(right, "combined_score");
+  }
+
+  function inferRunStatus() {
+    if (!state.runState.status && state.programs.length && !state.controlCapabilities.stop) {
+      return "replay";
+    }
+    if (state.programs.length && state.connectionState === "connected") {
+      return "running";
+    }
+    return "unknown";
+  }
+
+  function showToast(message, isError) {
+    if (!message) {
+      els.toast.className = "toast";
+      els.toast.textContent = "";
+      return;
+    }
+    els.toast.textContent = message;
+    els.toast.className = `toast visible${isError ? " error" : ""}`;
+    window.clearTimeout(state.toastTimer);
+    state.toastTimer = window.setTimeout(function() {
+      els.toast.className = "toast";
+      els.toast.textContent = "";
+    }, 4200);
+  }
+
+  function clearSelection() {
+    state.selectedId = null;
+    renderNow(["plot", "inspector", "raw"]);
+  }
+
+  function shortCheckpointLabel(checkpointPath) {
+    if (!checkpointPath || typeof checkpointPath !== "string") {
+      return "--";
+    }
+    const parts = checkpointPath.split(/[\\/]/).filter(Boolean);
+    if (!parts.length) {
+      return checkpointPath;
+    }
+    return parts.slice(-2).join("/");
+  }
+
+  function renderRichText(text) {
+    const safe = escapeHtml(String(text || ""));
+    const blocks = safe.split(/\n\s*\n/).map(function(block) {
+      return block.trim();
+    }).filter(Boolean);
+
+    if (!blocks.length) {
+      return "<p>No text available.</p>";
+    }
+
+    return blocks.map(function(block) {
+      const lines = block.split("\n").map(function(line) { return line.trim(); }).filter(Boolean);
+      const allBullets = lines.length > 1 && lines.every(function(line) { return line.startsWith("- "); });
+      if (allBullets) {
+        return `<ul>${lines.map(function(line) { return `<li>${inlineCode(line.slice(2))}</li>`; }).join("")}</ul>`;
+      }
+      return `<p>${inlineCode(lines.join("<br>"))}</p>`;
+    }).join("");
+  }
+
+  function inlineCode(htmlText) {
+    return htmlText.replace(/`([^`]+)`/g, "<code>$1</code>");
+  }
+
+  function metricLabel(metricKey) {
+    return metricKey.replace(/_/g, " ");
+  }
+
+  function seriesColor(seriesKey) {
+    const keys = Object.keys(state.visibleSeries).sort();
+    const index = Math.max(0, keys.indexOf(seriesKey));
+    return SERIES_COLORS[index % SERIES_COLORS.length];
+  }
+
+  function formatNumber(value) {
+    if (!Number.isFinite(value)) {
+      return "--";
+    }
+    if (Math.abs(value) >= 1000) {
+      return value.toFixed(1);
+    }
+    if (Math.abs(value) >= 100) {
+      return value.toFixed(2);
+    }
+    return value.toFixed(4);
+  }
+
+  function formatRelativeTimestamp(timestamp) {
+    if (!timestamp || !Number.isFinite(timestamp)) {
+      return "--";
+    }
+    const seconds = Math.max(0, Math.floor(Date.now() / 1000 - timestamp));
+    if (seconds < 5) {
+      return "just now";
+    }
+    if (seconds < 60) {
+      return `${seconds}s ago`;
+    }
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) {
+      return `${minutes}m ago`;
+    }
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) {
+      return `${hours}h ago`;
+    }
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  }
+
+  function formatRemainingIterations(remainingIterations, maxIterations) {
+    if (remainingIterations == null) {
+      return maxIterations == null ? "open-ended" : "--";
+    }
+    return String(remainingIterations);
+  }
+
+  function toNumber(value, fallback) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function escapeAttr(value) {
+    return escapeHtml(value);
+  }
+
+  els.metricSelect.addEventListener("change", function() {
+    state.metricKey = els.metricSelect.value || "combined_score";
+    ensureSelectionVisible();
+    renderNow(["header", "status", "plot", "inspector", "raw"]);
+  });
+
+  els.clearSelectionButton.addEventListener("click", clearSelection);
+
+  els.codeTabCurrent.addEventListener("click", function() {
+    state.activeCodeTab = "current";
+    renderNow(["raw"]);
+  });
+
+  els.codeTabParent.addEventListener("click", function() {
+    state.activeCodeTab = "parent";
+    renderNow(["raw"]);
+  });
+
+  els.summaryRefreshButton.addEventListener("click", function(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!state.summaryEnabled) {
+      showToast("AI summary is not configured for this monitor.", true);
+      return;
+    }
+    if (send({ type: "request_summary" })) {
+      state.summaryGenerating = true;
+      renderNow(["summary"]);
+      showToast("Summary refresh requested.");
+    }
+  });
+
+  els.startButton.addEventListener("click", function() {
+    if (!state.controlCapabilities.start) {
+      return;
+    }
+    if (send({ type: "request_start_run" })) {
+      showToast("Start requested. Preparing a new run...");
+    }
+  });
+
+  els.stopButton.addEventListener("click", function() {
+    if (!state.controlCapabilities.stop) {
+      return;
+    }
+    if (send({ type: "request_stop_run" })) {
+      showToast("Graceful stop requested. Waiting for the current iteration to finish.");
+    }
+  });
+
+  els.resumeButton.addEventListener("click", function() {
+    if (!state.controlCapabilities.resume) {
+      return;
+    }
+    if (send({ type: "request_resume_run" })) {
+      showToast("Resume requested. Restarting the runner from the latest checkpoint...");
+    }
+  });
+
+  els.hfModeAppend.addEventListener("click", function(event) {
+    event.preventDefault();
+    if (!state.hfEnabled) {
+      return;
+    }
+    state.hfMode = "append";
+    renderNow(["feedback"]);
+    send({ type: "set_human_feedback_mode", mode: "append" });
+  });
+
+  els.hfModeReplace.addEventListener("click", function(event) {
+    event.preventDefault();
+    if (!state.hfEnabled) {
+      return;
+    }
+    state.hfMode = "replace";
+    renderNow(["feedback"]);
+    send({ type: "set_human_feedback_mode", mode: "replace" });
+  });
+
+  els.hfSendButton.addEventListener("click", function() {
+    if (!state.hfEnabled) {
+      return;
+    }
+    send({
+      type: "set_feedback",
+      text: els.hfInput.value || "",
+    });
+  });
+
+  els.hfClearButton.addEventListener("click", function() {
+    if (!state.hfEnabled) {
+      return;
+    }
+    send({ type: "clear_feedback" });
+  });
+
+  els.feedbackPanel.addEventListener("toggle", function() {
+    if (els.feedbackPanel.open && state.hfEnabled) {
+      maybePrimeFeedbackData();
+    }
+  });
+
+  window.setInterval(function() {
+    scheduleRender(["status"]);
+  }, 1000);
+
+  renderAll();
+  connect();
+})();
+</script>
+</body>
+</html>

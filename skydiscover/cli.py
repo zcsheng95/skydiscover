@@ -14,6 +14,7 @@ from skydiscover.config import (
     _parse_model_spec,
     apply_overrides,
     load_config,
+    resolve_iteration_budget,
 )
 
 try:
@@ -60,6 +61,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", "-o", help="Output directory for results", default=None)
     parser.add_argument(
         "--iterations", "-i", type=int, default=None, help="Maximum number of iterations"
+    )
+    parser.add_argument(
+        "--run-forever",
+        action="store_true",
+        default=False,
+        help="Run indefinitely until interrupted or early stopping triggers",
     )
     parser.add_argument(
         "--log-level",
@@ -160,6 +167,21 @@ async def main_async() -> int:
                 get_runner,
                 is_external,
             )
+            iteration_budget = None
+
+            if search_type in KNOWN_EXTERNAL:
+                iteration_budget = resolve_iteration_budget(
+                    config,
+                    iterations=args.iterations,
+                    run_forever=args.run_forever,
+                )
+                if iteration_budget is None:
+                    print(
+                        f"Error: Search type '{search_type}' does not support unbounded runs yet. "
+                        "Use a native SkyDiscover backend for --run-forever or max_iterations: null.",
+                        file=sys.stderr,
+                    )
+                    return 1
 
             # External backends (openevolve, shinkaevolve, gepa)
             if is_external(search_type):
@@ -181,7 +203,7 @@ async def main_async() -> int:
                         program_path=args.initial_program,
                         evaluator_path=args.evaluation_file,
                         config_obj=config,
-                        iterations=args.iterations or config.max_iterations,
+                        iterations=iteration_budget,
                         output_dir=output_dir,
                         monitor_callback=monitor_callback,
                         feedback_reader=feedback_reader,
@@ -227,6 +249,7 @@ async def main_async() -> int:
         best_program = await runner.run(
             iterations=args.iterations,
             checkpoint_path=args.checkpoint,
+            run_forever=args.run_forever,
         )
 
         checkpoint_dir = os.path.join(runner.output_dir, "checkpoints")

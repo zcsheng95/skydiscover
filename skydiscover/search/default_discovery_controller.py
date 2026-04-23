@@ -99,6 +99,7 @@ class DiscoveryController:
         self.num_context_programs = controller_input.config.search.num_context_programs
 
         self.monitor_callback: Optional[Callable] = None
+        self.progress_callback: Optional[Callable[[int], None]] = None
         self.feedback_reader: Optional[Any] = None
         self._prompt_context: Dict[str, Any] = {}
 
@@ -172,7 +173,7 @@ class DiscoveryController:
     async def run_discovery(
         self,
         start_iteration: int,
-        max_iterations: int,
+        max_iterations: Optional[int],
         checkpoint_callback: Optional[Callable[[int], None]] = None,
         post_process_result: Optional[bool] = True,
         retry_times: Optional[int] = 3,
@@ -190,7 +191,7 @@ class DiscoveryController:
 
         Args:
             start_iteration: The iteration to start from.
-            max_iterations: The number of iterations to run.
+            max_iterations: The number of iterations to run, or ``None`` for unbounded mode.
             checkpoint_callback: Optional callback for checkpointing.
             post_process_result: If True, add results to the database and
                 return the best Program.  If False, return the raw
@@ -228,15 +229,18 @@ class DiscoveryController:
     async def _run_discovery_sequential(
         self,
         start_iteration: int,
-        max_iterations: int,
+        max_iterations: Optional[int],
         checkpoint_callback: Optional[Callable[[int], None]] = None,
         post_process_result: Optional[bool] = True,
         retry_times: Optional[int] = 3,
     ) -> Optional[Union[Program, SerializableResult]]:
-        total_iterations = start_iteration + max_iterations
-
         result = None
-        for iteration in range(start_iteration, total_iterations):
+        iteration = start_iteration
+        total_iterations = (
+            start_iteration + max_iterations if max_iterations is not None else None
+        )
+
+        while total_iterations is None or iteration < total_iterations:
             if self.shutdown_event.is_set():
                 logger.info("Shutdown requested, stopping discovery loop early")
                 break
@@ -252,6 +256,13 @@ class DiscoveryController:
 
             except Exception as e:
                 logger.exception(f"Error in iteration {iteration}: {e}")
+            finally:
+                if self.progress_callback is not None:
+                    try:
+                        self.progress_callback(iteration)
+                    except Exception:
+                        logger.debug("Progress callback error", exc_info=True)
+                iteration += 1
 
         if not post_process_result:
             return result
@@ -265,21 +276,29 @@ class DiscoveryController:
     async def _run_discovery_parallel(
         self,
         start_iteration: int,
-        max_iterations: int,
+        max_iterations: Optional[int],
         checkpoint_callback: Optional[Callable[[int], None]] = None,
         post_process_result: Optional[bool] = True,
         retry_times: Optional[int] = 3,
         max_parallel: int = 4,
     ) -> Optional[Union[Program, SerializableResult]]:
-        total_iterations = start_iteration + max_iterations
+        total_iterations = (
+            start_iteration + max_iterations if max_iterations is not None else None
+        )
         sem = asyncio.Semaphore(max_parallel)
         pending: set = set()
         last_result: Optional[SerializableResult] = None
 
-        logger.info(
-            f"Parallel discovery: up to {max_parallel} iterations in flight "
-            f"({start_iteration}..{total_iterations - 1})"
-        )
+        if total_iterations is None:
+            logger.info(
+                f"Parallel discovery: up to {max_parallel} iterations in flight "
+                f"(starting at {start_iteration}, unbounded)"
+            )
+        else:
+            logger.info(
+                f"Parallel discovery: up to {max_parallel} iterations in flight "
+                f"({start_iteration}..{total_iterations - 1})"
+            )
 
         async def _bounded_iteration(iteration: int) -> Tuple[int, Optional[SerializableResult]]:
             """Run one iteration under the semaphore, then process its result.
@@ -304,15 +323,23 @@ class DiscoveryController:
             elif result and result.error:
                 logger.warning(f"Iteration {iteration} failed: {result.error}")
 
+            if self.progress_callback is not None:
+                try:
+                    self.progress_callback(iteration)
+                except Exception:
+                    logger.debug("Progress callback error", exc_info=True)
+
             return iteration, result
 
-        for iteration in range(start_iteration, total_iterations):
+        iteration = start_iteration
+        while total_iterations is None or iteration < total_iterations:
             if self.shutdown_event.is_set():
                 break
 
             task = asyncio.create_task(_bounded_iteration(iteration), name=f"iter_{iteration}")
             pending.add(task)
             task.add_done_callback(pending.discard)
+            iteration += 1
 
             # When the pipeline is full, wait for at least one to finish
             # before scheduling more — this provides backpressure.
