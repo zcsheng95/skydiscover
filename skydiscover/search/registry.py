@@ -118,6 +118,7 @@ def setup_search(
     evaluation_file: str,
     config_path: str,
     output_dir: Optional[str] = None,
+    evaluator_env_vars: Optional[Dict[str, str]] = None,
     parent_llm_config: Optional["LLMConfig"] = None,
 ) -> Tuple[DiscoveryControllerInput, str]:
     """
@@ -175,5 +176,6 @@ def setup_search(
         database=database,
         file_suffix=config.file_suffix,
         output_dir=output_dir,
+        evaluator_env_vars=evaluator_env_vars,
     )
     return controller_input, initial_program_solution

@@ -1403,8 +1403,8 @@
     if (msg.program_id !== selectedId) return;
     const codeEl = document.getElementById('code-display');
     const parentEl = document.getElementById('parent-code-display');
-    if (codeEl) codeEl.textContent = msg.code || '(no code)';
-    if (parentEl) parentEl.textContent = msg.parent_code || '(no parent code)';
+    if (codeEl) codeEl.textContent = msg.solution || '(no code)';
+    if (parentEl) parentEl.textContent = msg.parent_solution || '(no parent code)';
 
     // Request image if this program has one (image evolution mode)
     const p = programMap[msg.program_id];

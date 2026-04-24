@@ -10,11 +10,8 @@ import traceback
 from typing import Optional
 
 from skydiscover import Runner
-from skydiscover.config import (
-    _parse_model_spec,
-    apply_overrides,
-    load_config,
-)
+from skydiscover.benchmarks.resolution import resolve_benchmark_problem
+from skydiscover.config import _parse_model_spec, apply_overrides, load_config
 
 try:
     multiprocessing.set_start_method("spawn")
@@ -34,6 +31,7 @@ _SEARCH_CHOICES = [
     "shinkaevolve",
     "gepa",
     "gepa_native",
+    "claude_code",
 ]
 
 
@@ -116,10 +114,13 @@ async def main_async() -> int:
 
     has_overrides = any((args.api_base, args.model, args.agentic, args.search))
     config = None
+    evaluator_env_vars: Optional[dict[str, str]] = None
 
     # Load the configuration
     if args.config or has_overrides:
         config = load_config(args.config)
+
+        evaluator_env_vars = None
 
         try:
             apply_overrides(
@@ -132,6 +133,21 @@ async def main_async() -> int:
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
+
+        # Resolve benchmark problem if configured and no initial_program provided
+        if args.initial_program is None and config.benchmark and config.benchmark.enabled:
+            try:
+                resolution = resolve_benchmark_problem(config.benchmark)
+                args.initial_program = resolution.initial_program_path
+                args.evaluation_file = resolution.evaluator_path
+                evaluator_env_vars = resolution.evaluator_env_vars
+                print(
+                    f"[Benchmark Loader] Benchmark: {config.benchmark.name}, Initial program: {args.initial_program}, Evaluator: {args.evaluation_file}"
+                )
+            except Exception as exc:
+                print(f"Error: Failed to load benchmark problem: {exc}", file=sys.stderr)
+                traceback.print_exc()
+                return 1
 
         if args.model:
             print("Active models:")
@@ -163,6 +179,17 @@ async def main_async() -> int:
 
             # External backends (openevolve, shinkaevolve, gepa)
             if is_external(search_type):
+                if evaluator_env_vars:
+                    env_var_names = ", ".join(sorted(evaluator_env_vars))
+                    print(
+                        "Error: Passing evaluator environment variables to external backends "
+                        "is not yet supported. "
+                        f"External backend '{search_type}' cannot be used with evaluator env vars: "
+                        f"{env_var_names}",
+                        file=sys.stderr,
+                    )
+                    return 1
+
                 from skydiscover.config import build_output_dir
 
                 output_dir = args.output or build_output_dir(
@@ -214,6 +241,7 @@ async def main_async() -> int:
             config=config,
             config_path=args.config if config is None else None,
             output_dir=args.output,
+            evaluator_env_vars=evaluator_env_vars,
         )
 
         # Load the checkpoint if provided

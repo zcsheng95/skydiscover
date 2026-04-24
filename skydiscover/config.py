@@ -468,6 +468,19 @@ class OpenEvolveNativeDatabaseConfig(DatabaseConfig):
 
 
 @dataclass
+class ClaudeCodeConfig(DatabaseConfig):
+    """Configuration for the Claude Code baseline.
+
+    Claude Code runs autonomously inside a Docker container, iterating on
+    the solution using the evaluator directly.  max_turns maps to the
+    --max-turns flag passed to the claude CLI.
+    """
+
+    max_turns: int = 50
+    docker_image: str = "skydiscover-claude-code:latest"
+
+
+@dataclass
 class GEPANativeDatabaseConfig(DatabaseConfig):
     """Configuration for GEPA Native search database.
 
@@ -497,6 +510,7 @@ _DB_CONFIG_BY_TYPE: Dict[str, type] = {
     "adaevolve": AdaEvolveDatabaseConfig,
     "openevolve_native": OpenEvolveNativeDatabaseConfig,
     "gepa_native": GEPANativeDatabaseConfig,
+    "claude_code": ClaudeCodeConfig,
 }
 
 
@@ -539,6 +553,31 @@ class MonitorConfig:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Benchmark Loader
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class BenchmarkConfig:
+    """Configuration for loading problems from external benchmark datasets.
+
+    When enabled, allows SkyDiscover to fetch problems from external
+    benchmark datasets (e.g., KernelBench, Frontier-CS) without requiring
+    explicit initial_program paths.
+
+    Benchmark specification and evaluation parameters (e.g., target problem)
+    are stored in a `params` dictionary.
+    """
+
+    enabled: bool = False
+    name: Optional[str] = None
+    resolver: Optional[str] = (
+        None  # Python import path to resolver module (e.g., 'benchmarks.kernelbench.resolver')
+    )
+    params: Dict[str, Any] = field(default_factory=dict)  # Benchmark-specific parameters
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Master Configuration
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -561,6 +600,7 @@ class Config:
     search: SearchConfig = field(default_factory=SearchConfig)
     evaluator: EvaluatorConfig = field(default_factory=EvaluatorConfig)
     agentic: AgenticConfig = field(default_factory=AgenticConfig)
+    benchmark: BenchmarkConfig = field(default_factory=BenchmarkConfig)
 
     # Live monitor dashboard
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
@@ -631,6 +671,7 @@ class Config:
                 "search",
                 "evaluator",
                 "agentic",
+                "benchmark",
                 "monitor",
             ] and hasattr(config, key):
                 setattr(config, key, value)
@@ -678,6 +719,13 @@ class Config:
                 if tuple_field in agentic_dict and isinstance(agentic_dict[tuple_field], list):
                     agentic_dict[tuple_field] = tuple(agentic_dict[tuple_field])
             config.agentic = AgenticConfig(**agentic_dict)
+        if "benchmark" in config_dict:
+            benchmark_dict = config_dict["benchmark"]
+            # Separate known dataclass fields from benchmark-specific parameters
+            known_fields = {f.name for f in fields(BenchmarkConfig) if f.name != "params"}
+            benchmark_known = {k: v for k, v in benchmark_dict.items() if k in known_fields}
+            benchmark_params = {k: v for k, v in benchmark_dict.items() if k not in known_fields}
+            config.benchmark = BenchmarkConfig(**benchmark_known, params=benchmark_params)
         if "monitor" in config_dict:
             config.monitor = MonitorConfig(**config_dict["monitor"])
 
