@@ -39,6 +39,10 @@ secrets.yaml
 output*/
 outputs*/
 outputs_*/
+results*/
+results_*/
+results_experiment*/
+.codex/
 
 
 # Benchmark generated data

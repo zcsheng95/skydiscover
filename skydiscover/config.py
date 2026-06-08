@@ -15,7 +15,6 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # Internal — provider resolution helpers
 # ═══════════════════════════════════════════════════════════════════════
@@ -447,6 +446,46 @@ class AdaEvolveDatabaseConfig(DatabaseConfig):
     fitness_key: Optional[str] = None
     pareto_objectives: List[str] = field(default_factory=list)
     pareto_objectives_weight: float = 0.0
+
+    # Evaluator prompt evolution (AdaEvolve-only, opt-in)
+    evaluator_prompt_evolution_enabled: bool = False
+    evaluator_prompt_window_size: int = 10
+    evaluator_prompt_saturation_threshold: float = 0.005
+    evaluator_prompt_min_interval: int = 10
+    evaluator_prompt_old_score_tolerance: float = 0.02
+    evaluator_prompt_penalty_weight: float = 2.0
+    evaluator_prompt_env_var: str = "SKYDISCOVER_EVALUATOR_SYSTEM_PROMPT_PATH"
+    evaluator_prompt_generator_score_mode: str = "latest_only"
+    evaluator_prompt_max_versions: int = 5
+    evaluator_prompt_max_feedback_chars: int = 12000
+
+    # Bi-level outer evaluator search (AdaEvolve-only, opt-in)
+    # Mode dispatches the outer step taken on saturation:
+    #   "single_shot" — one guide-LLM rewrite (legacy / baseline, default)
+    #   "adaevolve"   — nested AdaEvolve over evaluator prompts, optimizing
+    #                   prompt diversity while logging/soft-penalizing drift
+    #                   on a frozen probe set
+    #   "off"         — disable outer step entirely
+    outer_evaluator_mode: str = "single_shot"
+    outer_evaluator_max_iterations: int = 12
+    outer_evaluator_population_size: int = 6
+    outer_evaluator_operator_exploration_intensity: float = 0.4
+    outer_evaluator_probe_top_k: int = 3
+    outer_evaluator_probe_mid_k: int = 2
+    outer_evaluator_probe_low_k: int = 1
+    outer_evaluator_samples_per_eval: int = 5
+    outer_evaluator_judge_temperature: float = 0.7
+    outer_evaluator_alpha_prompt_diversity: float = 2.0
+    outer_evaluator_alpha_discrimination: float = 0.0
+    outer_evaluator_beta_within_variance: float = 1.0
+    outer_evaluator_gamma_drift: float = 0.25
+    outer_evaluator_baseline_mode: str = "latest_only"
+    outer_evaluator_drift_control_mode: str = "soft"
+    outer_evaluator_drift_hard_cap: float = 0.15
+    outer_evaluator_cumulative_drift_cap: float = 0.30
+    outer_evaluator_canary_top_k: int = 1
+    outer_evaluator_canary_mid_k: int = 1
+    outer_evaluator_canary_low_k: int = 1
 
 
 @dataclass

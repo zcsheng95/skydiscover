@@ -35,9 +35,35 @@ logger = logging.getLogger(__name__)
 _TEMPLATES_DIR = str(Path(__file__).parent / "templates")
 _TEXT_LANGUAGES = {"text", "prompt", "text/plain"}
 
+_PROMPT_METRIC_EXCLUDE_KEYS = {
+    "combined_score",
+    "error",
+    # Evaluator-prompt evolution bookkeeping.
+    "old_score_floor",
+    "evaluator_prompt_version",
+    "evaluator_prompt_score_mode",
+    # Judge evidence is rendered by AdaEvolve in a dedicated, prioritized
+    # guidance block so it is not duplicated in generic metric listings.
+    "judge_evidence",
+    "judge_conclusion",
+    "latest_judge_evidence",
+    "latest_judge_conclusion",
+    "old_judge_evidence",
+    "old_judge_conclusion",
+}
+
 
 def _filter_other_metrics(metrics: dict) -> dict:
-    return {k: v for k, v in metrics.items() if k not in {"combined_score", "error"}}
+    def should_keep(key: str) -> bool:
+        if key in _PROMPT_METRIC_EXCLUDE_KEYS:
+            return False
+        if key.startswith("test_"):
+            return False
+        if key.endswith("_path") or key.endswith("_path_stable"):
+            return False
+        return True
+
+    return {k: v for k, v in metrics.items() if should_keep(k)}
 
 
 class DefaultContextBuilder(ContextBuilder):

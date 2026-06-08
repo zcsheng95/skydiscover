@@ -8,6 +8,7 @@ import uuid
 from typing import Optional
 
 from skydiscover.config import Config, build_output_dir, load_config
+from skydiscover.llm.telemetry import TelemetrySink, set_sink
 from skydiscover.search.base_database import Program
 from skydiscover.search.default_discovery_controller import (
     DiscoveryController,
@@ -119,6 +120,9 @@ class Runner:
             Best Program found, or None if no valid programs were produced.
         """
         max_iterations = iterations if iterations is not None else self.config.max_iterations
+
+        # Install per-run telemetry sink for LLM-call logging.
+        set_sink(TelemetrySink(run_dir=self.output_dir, method=self.name))
 
         start_iteration = 0
         if checkpoint_path and os.path.exists(checkpoint_path):

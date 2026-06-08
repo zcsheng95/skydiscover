@@ -212,6 +212,12 @@ class AdaEvolveContextBuilder(DefaultContextBuilder):
         if feedback_section:
             sections.append(feedback_section)
 
+        latest_feedback_section = self._format_latest_evaluator_feedback(
+            context.get("evaluator_feedback_programs") or [("parent", parent_program)]
+        )
+        if latest_feedback_section:
+            sections.append(latest_feedback_section)
+
         # 2. Paradigm breakthrough guidance
         if paradigm:
             sections.append(self._format_paradigm_guidance(paradigm, language))
@@ -306,6 +312,82 @@ class AdaEvolveContextBuilder(DefaultContextBuilder):
             "Use this to make targeted improvements:\n\n"
             f"{feedback}"
         )
+
+    @classmethod
+    def _format_latest_evaluator_feedback(cls, programs: List[Any]) -> Optional[str]:
+        """Format judge evidence paired with scores from the active evaluator p_t."""
+        entries: List[str] = []
+        for raw_item in programs:
+            if isinstance(raw_item, tuple) and len(raw_item) == 2:
+                label, program = raw_item
+            else:
+                label, program = "context", raw_item
+
+            metrics = prog_attr(program, "metrics", {}) or {}
+            latest_evidence = metrics.get("latest_judge_evidence")
+            latest_conclusion = metrics.get("latest_judge_conclusion")
+            if not latest_evidence and not latest_conclusion:
+                latest_evidence = metrics.get("judge_evidence")
+                latest_conclusion = metrics.get("judge_conclusion")
+
+            if not latest_evidence and not latest_conclusion:
+                continue
+
+            combined = metrics.get("combined_score")
+            latest_score = metrics.get("latest_combined_score")
+            old_score = metrics.get("old_combined_score")
+
+            lines = [f"### {label or 'context'}"]
+            if isinstance(combined, (int, float)):
+                lines.append(f"- combined_score used by optimizer: {combined:.4f}")
+            if isinstance(latest_score, (int, float)):
+                lines.append(f"- latest_combined_score (p_t): {latest_score:.4f}")
+            if isinstance(old_score, (int, float)):
+                lines.append(f"- old_combined_score (p0): {old_score:.4f}")
+            if latest_conclusion:
+                lines.append(
+                    "- latest_judge_conclusion (p_t): "
+                    + cls._truncate_feedback(str(latest_conclusion), 700)
+                )
+            if latest_evidence:
+                lines.append(
+                    "- latest_judge_evidence (p_t): "
+                    + cls._truncate_feedback(str(latest_evidence), 1400)
+                )
+
+            old_conclusion = metrics.get("old_judge_conclusion")
+            old_evidence = metrics.get("old_judge_evidence")
+            if old_conclusion:
+                lines.append(
+                    "- old_judge_conclusion (p0): "
+                    + cls._truncate_feedback(str(old_conclusion), 500)
+                )
+            if old_evidence:
+                lines.append(
+                    "- old_judge_evidence (p0): "
+                    + cls._truncate_feedback(str(old_evidence), 800)
+                )
+
+            entries.append("\n".join(lines))
+
+        if not entries:
+            return None
+
+        body = "\n\n".join(entries)
+        return (
+            "## LATEST EVALUATOR EVIDENCE FOR NEXT MOVE\n"
+            "Use the feedback paired with latest_combined_score from the active "
+            "evaluator prompt p_t to decide what to change next. The optimizer "
+            "score follows the active evaluator; p0 evidence is shown only as "
+            "diagnostic context when available.\n\n"
+            f"{cls._truncate_feedback(body, 5000)}"
+        )
+
+    @staticmethod
+    def _truncate_feedback(text: str, max_len: int) -> str:
+        if len(text) <= max_len:
+            return text
+        return text[:max_len] + "\n... (truncated)"
 
     @staticmethod
     def _format_paradigm_guidance(paradigm: Dict[str, Any], language: str) -> str:

@@ -22,6 +22,7 @@ from skydiscover.evaluation import create_evaluator
 from skydiscover.evaluation.llm_judge import LLMJudge
 from skydiscover.llm.base import LLMResponse
 from skydiscover.llm.llm_pool import LLMPool
+from skydiscover.llm.telemetry import get_sink, role_scope, unit_scope
 from skydiscover.search.base_database import Program, ProgramDatabase
 from skydiscover.search.utils.discovery_utils import SerializableResult, build_image_content
 from skydiscover.utils.code_utils import (
@@ -408,6 +409,11 @@ class DiscoveryController:
             eval_result = await self.evaluator.evaluate_program(child_solution, child_id)
             eval_time = time.time() - eval_start
 
+            _sink = get_sink()
+            _scratch_meta = {"changes": "Generated from scratch", "created_at": time.time()}
+            if _sink is not None:
+                _scratch_meta["llm_calls_at_creation"] = _sink.n_calls
+                _scratch_meta["llm_tokens_at_creation"] = _sink.n_tokens
             child = Program(
                 id=child_id,
                 solution=child_solution,
@@ -415,7 +421,7 @@ class DiscoveryController:
                 parent_id=None,
                 metrics=eval_result.metrics,
                 iteration_found=iteration,
-                metadata={"changes": "Generated from scratch"},
+                metadata=_scratch_meta,
                 artifacts=eval_result.artifacts or {},
             )
 
@@ -440,6 +446,14 @@ class DiscoveryController:
         retry_times: int = 1,
     ) -> SerializableResult:
         """Run a single generate-evaluate iteration."""
+        with unit_scope(f"iter_{iteration:05d}"):
+            return await self._run_iteration_body(iteration, retry_times)
+
+    async def _run_iteration_body(
+        self,
+        iteration: int,
+        retry_times: int,
+    ) -> SerializableResult:
         try:
             if not self.database.programs:
                 return await self._run_from_scratch_iteration(iteration)
@@ -854,6 +868,13 @@ class DiscoveryController:
         }
         if extra_metadata:
             metadata.update(extra_metadata)
+
+        # Snapshot telemetry counters for wall-clock + LLM-call axes.
+        _sink = get_sink()
+        metadata.setdefault("created_at", time.time())
+        if _sink is not None:
+            metadata.setdefault("llm_calls_at_creation", _sink.n_calls)
+            metadata.setdefault("llm_tokens_at_creation", _sink.n_tokens)
 
         return Program(
             id=child_id,

@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "gpt-4o-mini")
 JUDGE_MAX_TOKENS = int(os.environ.get("JUDGE_MAX_TOKENS", "2048"))
 JUDGE_TIMEOUT_SECONDS = int(os.environ.get("JUDGE_TIMEOUT_SECONDS", "120"))
+EVALUATOR_SYSTEM_PROMPT_ENV_VAR = "SKYDISCOVER_EVALUATOR_SYSTEM_PROMPT_PATH"
+EVALUATOR_TEMPERATURE_ENV_VAR = "SKYDISCOVER_EVALUATOR_TEMPERATURE"
 
 DIMENSION_KEYS = [
     "Correctness & Factuality",
@@ -103,6 +105,28 @@ Return a JSON object with exactly this structure:
 _client = None
 
 
+def _get_system_prompt() -> str:
+    prompt_path = os.environ.get(EVALUATOR_SYSTEM_PROMPT_ENV_VAR)
+    if not prompt_path:
+        return SYSTEM_PROMPT
+    try:
+        return open(prompt_path, "r", encoding="utf-8").read()
+    except OSError as exc:
+        logger.warning("Could not read evaluator prompt override %s: %s", prompt_path, exc)
+        return SYSTEM_PROMPT
+
+
+def _get_judge_temperature():
+    raw = os.environ.get(EVALUATOR_TEMPERATURE_ENV_VAR)
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("Invalid evaluator temperature override %r", raw)
+        return None
+
+
 def _get_client():
     global _client
     if _client is None:
@@ -150,7 +174,7 @@ def _judge(insight: str, chart_path: str) -> Dict[str, Union[float, str]]:
     user_text = USER_PROMPT_TEMPLATE.format(insight=insight)
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": _get_system_prompt()},
         {
             "role": "user",
             "content": [
@@ -165,12 +189,16 @@ def _judge(insight: str, chart_path: str) -> Dict[str, Union[float, str]]:
 
     for attempt in range(2):
         try:
-            response = client.responses.create(
-                model=JUDGE_MODEL,
-                input=messages,
-                max_output_tokens=max_output_tokens,
-                text={"format": {"type": "json_object"}},
-            )
+            request = {
+                "model": JUDGE_MODEL,
+                "input": messages,
+                "max_output_tokens": max_output_tokens,
+                "text": {"format": {"type": "json_object"}},
+            }
+            temperature = _get_judge_temperature()
+            if temperature is not None:
+                request["temperature"] = temperature
+            response = client.responses.create(**request)
 
             raw = (response.output_text or "").strip()
             logger.info("Judge raw response (attempt=%d): %s", attempt + 1, raw[:300])

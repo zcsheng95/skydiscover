@@ -25,7 +25,17 @@ from typing import Any, Dict, List, Optional
 from skydiscover.context_builder.adaevolve import AdaEvolveContextBuilder
 from skydiscover.context_builder.default import DefaultContextBuilder
 from skydiscover.evaluation.llm_judge import LLMJudge
+from skydiscover.llm.telemetry import get_sink
 from skydiscover.llm.llm_pool import LLMPool
+from skydiscover.search.adaevolve.evaluator_prompt_evolution import (
+    BiLevelOrchestrator,
+    EvaluatorPromptEvolutionManager,
+    OuterEvaluatorConfig,
+    ProbeRecord,
+    merge_bilevel_metrics,
+    scoped_evaluator_env,
+    score_from_metrics,
+)
 from skydiscover.search.adaevolve.paradigm import ParadigmGenerator
 from skydiscover.search.base_database import Program
 from skydiscover.search.default_discovery_controller import (
@@ -67,10 +77,13 @@ class AdaEvolveController(DiscoveryController):
         self.enable_retry = getattr(db_config, "enable_error_retry", True)
         self.max_retries = getattr(db_config, "max_error_retries", 2)
         self.num_context_programs = self.config.search.num_context_programs
+        self.evaluator_prompt_manager: Optional[EvaluatorPromptEvolutionManager] = None
+        self.bilevel_orchestrator: Optional[BiLevelOrchestrator] = None
 
         # Components
         self.llms = LLMPool(self.config.llm.models)
         self.context_builder = AdaEvolveContextBuilder(self.config)
+        self._init_evaluator_prompt_evolution(db_config)
 
         # Paradigm generator (if paradigm breakthrough is enabled)
         # Note: We check database.use_paradigm_breakthrough at runtime, not this init-time flag
@@ -102,8 +115,80 @@ class AdaEvolveController(DiscoveryController):
         logger.info(
             f"AdaEvolveController initialized "
             f"(language={self.config.language}, "
-            f"paradigm_breakthrough={self.database.use_paradigm_breakthrough})"
+            f"paradigm_breakthrough={self.database.use_paradigm_breakthrough}, "
+            f"evaluator_prompt_evolution={self.evaluator_prompt_manager is not None})"
         )
+
+    def _init_evaluator_prompt_evolution(self, db_config) -> None:
+        """Initialize AdaEvolve evaluator prompt evolution when enabled."""
+        if not getattr(db_config, "evaluator_prompt_evolution_enabled", False):
+            return
+
+        output_dir = self.output_dir or getattr(self.database.config, "db_path", None) or "."
+        original_prompt = self._load_original_evaluator_prompt()
+        self.evaluator_prompt_manager = EvaluatorPromptEvolutionManager(
+            output_dir=output_dir,
+            original_prompt=original_prompt,
+            guide_llms=self.guide_llms,
+            window_size=getattr(db_config, "evaluator_prompt_window_size", 10),
+            saturation_threshold=getattr(db_config, "evaluator_prompt_saturation_threshold", 0.005),
+            min_interval=getattr(db_config, "evaluator_prompt_min_interval", 10),
+            old_score_tolerance=getattr(db_config, "evaluator_prompt_old_score_tolerance", 0.02),
+            penalty_weight=getattr(db_config, "evaluator_prompt_penalty_weight", 2.0),
+            env_var=getattr(
+                db_config,
+                "evaluator_prompt_env_var",
+                "SKYDISCOVER_EVALUATOR_SYSTEM_PROMPT_PATH",
+            ),
+            score_mode=getattr(db_config, "evaluator_prompt_generator_score_mode", "latest_only"),
+            max_versions=getattr(db_config, "evaluator_prompt_max_versions", 5),
+            max_feedback_chars=getattr(db_config, "evaluator_prompt_max_feedback_chars", 12000),
+        )
+
+        # Bi-level outer-evaluator orchestrator (used for both single_shot
+        # and adaevolve modes; only skipped when mode=off). single_shot
+        # reuses the orchestrator's drift-gate machinery so the two modes
+        # differ only in whether a population search is run.
+        outer_mode = getattr(db_config, "outer_evaluator_mode", "single_shot")
+        if outer_mode in ("adaevolve", "single_shot"):
+            self.bilevel_orchestrator = BiLevelOrchestrator(
+                manager=self.evaluator_prompt_manager,
+                config=OuterEvaluatorConfig(
+                    max_iterations=getattr(db_config, "outer_evaluator_max_iterations", 12),
+                    population_size=getattr(db_config, "outer_evaluator_population_size", 6),
+                    samples_per_eval=getattr(db_config, "outer_evaluator_samples_per_eval", 5),
+                    judge_temperature=getattr(db_config, "outer_evaluator_judge_temperature", 0.7),
+                    operator_exploration_intensity=getattr(
+                        db_config, "outer_evaluator_operator_exploration_intensity", 0.4
+                    ),
+                    alpha_prompt_diversity=getattr(
+                        db_config, "outer_evaluator_alpha_prompt_diversity", 2.0
+                    ),
+                    alpha_discrimination=getattr(db_config, "outer_evaluator_alpha_discrimination", 0.0),
+                    beta_within_variance=getattr(db_config, "outer_evaluator_beta_within_variance", 1.0),
+                    gamma_drift=getattr(db_config, "outer_evaluator_gamma_drift", 0.25),
+                    baseline_mode=getattr(db_config, "outer_evaluator_baseline_mode", "latest_only"),
+                    drift_control_mode=getattr(db_config, "outer_evaluator_drift_control_mode", "soft"),
+                    drift_hard_cap=getattr(db_config, "outer_evaluator_drift_hard_cap", 0.15),
+                    cumulative_drift_cap=getattr(db_config, "outer_evaluator_cumulative_drift_cap", 0.30),
+                    canary_top_k=getattr(db_config, "outer_evaluator_canary_top_k", 1),
+                    canary_mid_k=getattr(db_config, "outer_evaluator_canary_mid_k", 1),
+                    canary_low_k=getattr(db_config, "outer_evaluator_canary_low_k", 1),
+                    probe_top_k=getattr(db_config, "outer_evaluator_probe_top_k", 3),
+                    probe_mid_k=getattr(db_config, "outer_evaluator_probe_mid_k", 2),
+                    probe_low_k=getattr(db_config, "outer_evaluator_probe_low_k", 1),
+                ),
+                probe_evaluator=self._make_probe_evaluator(),
+                guide_llms=self.guide_llms,
+            )
+
+    def _load_original_evaluator_prompt(self) -> str:
+        """Read the evaluator's baseline SYSTEM_PROMPT when available."""
+        module = getattr(self.evaluator, "_eval_module", None)
+        prompt = getattr(module, "SYSTEM_PROMPT", None)
+        if isinstance(prompt, str):
+            return prompt
+        return ""
 
     def _load_evaluator_code(self) -> str:
         """Load evaluator source code for paradigm generation context."""
@@ -201,11 +286,17 @@ class AdaEvolveController(DiscoveryController):
 
             # Add child program info if available
             if child_program:
+                _cp_meta = child_program.get("metadata") or {}
                 stats["iteration_result"]["child_program"] = {
                     "id": child_program.get("id"),
                     "metrics": child_program.get("metrics"),
                     "generation": child_program.get("generation"),
                     "parent_id": child_program.get("parent_id"),
+                    "metadata": {
+                        "created_at": _cp_meta.get("created_at"),
+                        "llm_calls_at_creation": _cp_meta.get("llm_calls_at_creation"),
+                        "llm_tokens_at_creation": _cp_meta.get("llm_tokens_at_creation"),
+                    },
                 }
 
             # Write to JSONL file
@@ -325,6 +416,7 @@ class AdaEvolveController(DiscoveryController):
             )
         else:
             self._process_result(result, iteration, checkpoint_callback)
+            await self._maybe_evolve_evaluator_prompt(result, iteration)
             # Log successful iteration stats
             self._log_iteration_stats(
                 iteration=iteration,
@@ -459,6 +551,182 @@ class AdaEvolveController(DiscoveryController):
             if checkpoint_callback:
                 checkpoint_callback(iteration)
 
+    def _make_probe_evaluator(self):
+        """Build an async probe-evaluator callable used by the bi-level orchestrator.
+
+        Signature: async (prompt_text: Optional[str], probes, K: int) -> Dict[probe_id, List[float]].
+        - prompt_text=None or empty → use baseline p_0 (clears the env var override)
+        - prompt_text non-empty → write to a temp file and point the evaluator's env var at it
+        - K samples are obtained by repeated evaluator.evaluate_program calls; the judge
+          temperature env var is set so the underlying judge LLM call returns varied scores
+        """
+        manager = self.evaluator_prompt_manager
+        outer_cfg_temp = getattr(
+            self.config.search.database, "outer_evaluator_judge_temperature", 0.7
+        )
+
+        async def _evaluate(prompt_text: Optional[str], probes, K: int):
+            import tempfile
+
+            results: Dict[str, List[float]] = {p.program_id: [] for p in probes}
+            tmp_path: Optional[str] = None
+            if prompt_text:
+                fd, tmp_path = tempfile.mkstemp(suffix=".txt", prefix="outer_prompt_")
+                with os.fdopen(fd, "w") as f:
+                    f.write(prompt_text)
+
+            env_updates = {
+                manager.env_var: tmp_path,  # None → clears override → uses baseline SYSTEM_PROMPT
+                "SKYDISCOVER_EVALUATOR_TEMPERATURE": str(outer_cfg_temp),
+            }
+            try:
+                with scoped_evaluator_env(self.evaluator, env_updates):
+                    for probe in probes:
+                        for k in range(K):
+                            try:
+                                eval_result = await self.evaluator.evaluate_program(
+                                    probe.eval_input, f"outer:{probe.program_id}:k{k}"
+                                )
+                                score = score_from_metrics(eval_result.metrics or {})
+                                if score is not None:
+                                    results[probe.program_id].append(score)
+                            except Exception as e:
+                                logger.warning(
+                                    f"Probe eval failed for {probe.program_id} k={k}: {e}"
+                                )
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+            return results
+
+        return _evaluate
+
+    async def _maybe_evolve_evaluator_prompt(
+        self,
+        result: SerializableResult,
+        iteration: int,
+    ) -> None:
+        """Update the active evaluator prompt when recent scores saturate."""
+        manager = self.evaluator_prompt_manager
+        if manager is None or not result.child_program_dict:
+            return
+
+        child = Program(**result.child_program_dict)
+        if not manager.record_candidate(child, iteration):
+            return
+
+        if not manager.can_create_version():
+            manager.monitor.mark_triggered(iteration)
+            return
+
+        outer_mode = getattr(
+            self.config.search.database, "outer_evaluator_mode", "single_shot"
+        )
+        if outer_mode == "off":
+            manager.monitor.mark_triggered(iteration)
+            return
+
+        manager.ensure_old_score_floor(self.database.programs.values())
+
+        if outer_mode in ("adaevolve", "single_shot") and self.bilevel_orchestrator is not None:
+            feedback = manager.aggregate_feedback(self.database.programs.values(), iteration)
+            try:
+                version = await self._run_bilevel_outer(
+                    iteration, mode=outer_mode, feedback=feedback
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Outer evaluator step ({outer_mode}) failed: {e}", exc_info=True
+                )
+                manager.monitor.mark_triggered(iteration)
+                return
+            if version:
+                logger.info(
+                    "Evaluator prompt evolved (%s) to v%d at iteration %d: %s",
+                    outer_mode,
+                    version.version,
+                    iteration,
+                    version.path,
+                )
+            else:
+                # No install (drift-gated rejection / no viable candidate).
+                manager.monitor.mark_triggered(iteration)
+            return
+
+        # Fallback: legacy single-shot rewrite without gates (no orchestrator).
+        feedback = manager.aggregate_feedback(self.database.programs.values(), iteration)
+        try:
+            version = await manager.optimize_prompt(feedback, iteration)
+        except Exception as e:
+            logger.warning(f"Evaluator prompt evolution failed: {e}", exc_info=True)
+            manager.monitor.mark_triggered(iteration)
+            return
+        if version:
+            logger.info(
+                "Evaluator prompt evolved to v%d at iteration %d: %s",
+                version.version,
+                iteration,
+                version.path,
+            )
+
+    async def _run_bilevel_outer(
+        self, iteration: int, *, mode: str = "adaevolve", feedback: str = ""
+    ):
+        """Freeze probes + canary, then run the orchestrator in the given mode.
+
+        mode="adaevolve" runs the full population search; mode="single_shot"
+        runs one gated guide-LLM rewrite. Both share probe-freeze, baseline
+        caching, canary persistence, and drift gates.
+
+        Returns the installed PromptVersion or None if no install happened.
+        """
+        orch = self.bilevel_orchestrator
+        if orch is None:
+            return None
+        cfg = orch.config
+        all_programs = list(self.database.programs.values())
+
+        # Freeze probe set (stratified top/mid/low).
+        strata = orch.stratified_select(
+            all_programs,
+            top_k=cfg.probe_top_k,
+            mid_k=cfg.probe_mid_k,
+            low_k=cfg.probe_low_k,
+        )
+        probes: List[ProbeRecord] = []
+        for tier in ("top", "mid", "low"):
+            for p in strata[tier]:
+                probes.append(
+                    ProbeRecord(program_id=p.id, eval_input=p.solution or "", tier=tier)
+                )
+        if not probes:
+            logger.info("Bi-level outer skipped: no eligible probe programs")
+            return None
+
+        # Compute reference baseline J(c; p_ref) per probe (one sample).
+        await orch.refresh_reference_baselines(probes)
+
+        # Persistent canary set (frozen on first saturation, reused thereafter).
+        canaries = await orch.ensure_canary(all_programs)
+        await orch.refresh_reference_baselines(canaries)
+
+        if mode == "single_shot":
+            return await orch.run_single_shot(
+                iteration=iteration,
+                feedback=feedback,
+                probes=probes,
+                canaries=canaries,
+            )
+        return await orch.run(
+            iteration=iteration,
+            feedback=feedback,
+            probes=probes,
+            canaries=canaries,
+        )
+
     # =========================================================================
     # Child Generation
     # =========================================================================
@@ -533,6 +801,9 @@ class AdaEvolveController(DiscoveryController):
             context = {
                 "program_metrics": parent.metrics,
                 "other_context_programs": context_programs_dict,
+                "evaluator_feedback_programs": self._collect_evaluator_feedback_programs(
+                    parent, context_programs_dict
+                ),
                 # AdaEvolve-specific keys (consumed by AdaEvolveContextBuilder)
                 "paradigm": paradigm,
                 "siblings": siblings,
@@ -585,6 +856,38 @@ class AdaEvolveController(DiscoveryController):
     # =========================================================================
     # LLM Generation
     # =========================================================================
+
+    @staticmethod
+    def _collect_evaluator_feedback_programs(
+        parent: Program,
+        context_programs: Dict[str, List[Program]],
+        *,
+        max_context_programs: int = 3,
+    ) -> List[tuple[str, Program]]:
+        """Select programs whose evaluator evidence should guide the next move."""
+        selected: List[tuple[str, Program]] = [("parent", parent)]
+        seen = {parent.id}
+        for label, programs in (context_programs or {}).items():
+            for program in programs:
+                if program.id in seen:
+                    continue
+                metrics = program.metrics or {}
+                has_feedback = any(
+                    metrics.get(key)
+                    for key in (
+                        "latest_judge_evidence",
+                        "latest_judge_conclusion",
+                        "judge_evidence",
+                        "judge_conclusion",
+                    )
+                )
+                if not has_feedback:
+                    continue
+                selected.append((label, program))
+                seen.add(program.id)
+                if len(selected) >= max_context_programs + 1:
+                    return selected
+        return selected
 
     async def _execute_generation(
         self,
@@ -659,7 +962,7 @@ class AdaEvolveController(DiscoveryController):
         try:
             eval_input = image_path if self.config.language == "image" else child_solution
             eval_start = time.time()
-            eval_result = await self.evaluator.evaluate_program(eval_input, child_id)
+            eval_result = await self._evaluate_candidate(eval_input, child_id)
             eval_time = time.time() - eval_start
         except Exception as e:
             return SerializableResult(error=f"Evaluation error: {e}", iteration=iteration)
@@ -676,9 +979,19 @@ class AdaEvolveController(DiscoveryController):
             )
 
         # Build child program with full tracking info
-        child_metadata = {"changes": changes, "parent_metrics": parent.metrics}
+        child_metadata = {
+            "changes": changes,
+            "parent_metrics": parent.metrics,
+            "created_at": time.time(),
+        }
+        _sink = get_sink()
+        if _sink is not None:
+            child_metadata["llm_calls_at_creation"] = _sink.n_calls
+            child_metadata["llm_tokens_at_creation"] = _sink.n_tokens
         if image_path:
             child_metadata["image_path"] = image_path
+        if self.evaluator_prompt_manager is not None:
+            child_metadata["evaluator_prompt_version"] = metrics.get("evaluator_prompt_version", 0)
         child = Program(
             id=child_id,
             solution=child_solution,
@@ -707,3 +1020,47 @@ class AdaEvolveController(DiscoveryController):
             llm_response=response,
             iteration=iteration,
         )
+
+    async def _evaluate_candidate(self, eval_input: str, child_id: str):
+        """Evaluate a candidate once or with old/latest evaluator prompts."""
+        manager = self.evaluator_prompt_manager
+        if manager is None:
+            return await self.evaluator.evaluate_program(eval_input, child_id)
+
+        if not manager.has_evolved_prompt:
+            with scoped_evaluator_env(self.evaluator, {manager.env_var: None}):
+                eval_result = await self.evaluator.evaluate_program(eval_input, child_id)
+            score = score_from_metrics(eval_result.metrics or {}) or 0.0
+            eval_result.metrics = dict(eval_result.metrics or {})
+            eval_result.metrics.setdefault("old_combined_score", score)
+            eval_result.metrics.setdefault("latest_combined_score", score)
+            eval_result.metrics.setdefault("evaluator_prompt_version", 0)
+            if manager.old_score_floor is not None:
+                eval_result.metrics.setdefault("old_score_floor", manager.old_score_floor)
+            return eval_result
+
+        prompt_path = manager.active_prompt_path
+        with scoped_evaluator_env(self.evaluator, {manager.env_var: prompt_path}):
+            latest_result = await self.evaluator.evaluate_program(
+                eval_input, f"{child_id}:latest_v{manager.active_version}"
+            )
+        with scoped_evaluator_env(self.evaluator, {manager.env_var: None}):
+            old_result = await self.evaluator.evaluate_program(eval_input, f"{child_id}:old_v0")
+
+        old_score_floor = manager.old_score_floor
+        if old_score_floor is None:
+            old_score_floor = manager.ensure_old_score_floor(self.database.programs.values())
+
+        latest_result.metrics = merge_bilevel_metrics(
+            old_metrics=old_result.metrics or {},
+            latest_metrics=latest_result.metrics or {},
+            prompt_version=manager.active_version,
+            old_score_floor=old_score_floor,
+            penalty_weight=manager.penalty_weight,
+            score_mode=getattr(manager, "score_mode", "latest_only"),
+        )
+        latest_result.artifacts = dict(latest_result.artifacts or {})
+        old_artifacts = old_result.artifacts or {}
+        if old_artifacts:
+            latest_result.artifacts["old_evaluator_artifacts"] = old_artifacts
+        return latest_result
